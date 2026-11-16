@@ -26,6 +26,48 @@ function mail_transport_configured(): bool
     return $host !== '' && $user !== '' && $pass !== '';
 }
 
+function otp_email_logo_url(): string
+{
+    $appUrl = trim((string) getenv('APP_URL'));
+    if ($appUrl === '') {
+        $pubHost = trim((string) getenv('RAILWAY_PUBLIC_DOMAIN'));
+        $appUrl = $pubHost !== '' ? ('https://' . $pubHost) : 'https://portal-unira.up.railway.app';
+    }
+    return rtrim($appUrl, '/') . '/icon-192.png';
+}
+
+function render_otp_email_html(string $toName, string $code, string $purposeLabel): string
+{
+    $safeName = htmlspecialchars($toName !== '' ? $toName : 'Pengguna', ENT_QUOTES, 'UTF-8');
+    $safeCode = htmlspecialchars($code, ENT_QUOTES, 'UTF-8');
+    $safePurpose = htmlspecialchars($purposeLabel, ENT_QUOTES, 'UTF-8');
+    $safeLogo = htmlspecialchars(otp_email_logo_url(), ENT_QUOTES, 'UTF-8');
+
+    return '<!doctype html><html><body style="margin:0;padding:24px;background:#f4f0fb;font-family:Segoe UI,Roboto,Arial,sans-serif;color:#1a1228;">'
+        . '<div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #e4dcf3;box-shadow:0 8px 24px rgba(76,29,149,0.08);">'
+        . '<div style="padding:20px 26px;background:#4c1d95;background:linear-gradient(135deg,#4c1d95 0%,#6d4aff 100%);">'
+        . '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;"><tr>'
+        . '<td style="width:48px;vertical-align:middle;">'
+        . '<img src="' . $safeLogo . '" width="40" height="40" alt="UNIRA" style="display:block;width:40px;height:40px;border-radius:10px;background:#ffffff;padding:2px;">'
+        . '</td>'
+        . '<td style="padding-left:12px;vertical-align:middle;">'
+        . '<div style="font-size:14px;font-weight:700;letter-spacing:0.04em;color:#ffffff;text-transform:uppercase;">Universitas Indramayu</div>'
+        . '<div style="font-size:11.5px;color:#e9e0ff;margin-top:2px;">Portal Akademik · Verifikasi Akun</div>'
+        . '</td>'
+        . '</tr></table>'
+        . '</div>'
+        . '<div style="padding:26px 28px 28px;">'
+        . '<h2 style="margin:0 0 10px;font-size:20px;color:#1a1228;">Kode Verifikasi OTP</h2>'
+        . '<p style="margin:0 0 16px;font-size:14px;line-height:1.55;color:#5c5470;">Halo <strong>' . $safeName . '</strong>, gunakan kode OTP berikut untuk <strong>' . $safePurpose . '</strong>:</p>'
+        . '<div style="margin:18px 0;padding:16px;border-radius:14px;background:#f3edff;border:1px dashed #6d4aff;text-align:center;">'
+        . '<span style="font-size:32px;font-weight:800;letter-spacing:8px;color:#4c1d95;font-family:Consolas,monospace;">' . $safeCode . '</span>'
+        . '</div>'
+        . '<p style="margin:0 0 10px;font-size:13px;line-height:1.55;color:#5c5470;">Kode ini berlaku selama <strong>10 menit</strong>. Demi keamanan akun, jangan bagikan kode ini kepada siapa pun.</p>'
+        . '<p style="margin:0;font-size:12px;color:#847b9e;">Jika Anda tidak merasa meminta kode ini, silakan abaikan email ini.</p>'
+        . '</div>'
+        . '</div></body></html>';
+}
+
 /**
  * Mengirim kode OTP ke email tujuan menggunakan Google Apps Script, Brevo HTTP API, Resend API, atau SMTP.
  *
@@ -34,9 +76,6 @@ function mail_transport_configured(): bool
 function send_otp_email(string $toEmail, string $toName, string $code, string $purposeLabel): array
 {
     $subject = 'Kode OTP ' . $purposeLabel . ' · Portal Akademik UNIRA';
-    $safeName = htmlspecialchars($toName !== '' ? $toName : 'Pengguna', ENT_QUOTES, 'UTF-8');
-    $safeCode = htmlspecialchars($code, ENT_QUOTES, 'UTF-8');
-    $safePurpose = htmlspecialchars($purposeLabel, ENT_QUOTES, 'UTF-8');
 
     $textBody = "Halo {$toName},\n\n"
         . "Berikut kode OTP untuk {$purposeLabel} di Portal Akademik Universitas Indramayu:\n\n"
@@ -44,16 +83,7 @@ function send_otp_email(string $toEmail, string $toName, string $code, string $p
         . "Kode ini berlaku selama 10 menit dan bersifat rahasia. Jangan bagikan kode ini kepada siapa pun.\n\n"
         . "Jika Anda tidak merasa meminta kode ini, abaikan email ini.\n";
 
-    $htmlBody = '<!doctype html><html><body style="margin:0;padding:24px;background:#f4f0fb;font-family:Segoe UI,Roboto,Arial,sans-serif;color:#1a1228;">'
-        . '<div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:18px;padding:28px;border:1px solid #e4dcf3;">'
-        . '<p style="margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#6d4aff;">Universitas Indramayu</p>'
-        . '<h2 style="margin:0 0 12px;font-size:20px;color:#1a1228;">Kode Verifikasi OTP</h2>'
-        . '<p style="margin:0 0 16px;font-size:14px;line-height:1.55;color:#5c5470;">Halo <strong>' . $safeName . '</strong>, gunakan kode OTP berikut untuk <strong>' . $safePurpose . '</strong>:</p>'
-        . '<div style="margin:18px 0;padding:16px;border-radius:14px;background:#f3edff;border:1px dashed #6d4aff;text-align:center;">'
-        . '<span style="font-size:32px;font-weight:800;letter-spacing:8px;color:#4c1d95;font-family:Consolas,monospace;">' . $safeCode . '</span>'
-        . '</div>'
-        . '<p style="margin:0;font-size:13px;line-height:1.5;color:#5c5470;">Kode berlaku selama <strong>10 menit</strong>. Demi keamanan akun, jangan bagikan kode ini kepada siapa pun.</p>'
-        . '</div></body></html>';
+    $htmlBody = render_otp_email_html($toName, $code, $purposeLabel);
 
     $gasUrl = trim((string) getenv('GAS_WEBHOOK_URL'));
     $brevoKey = trim((string) getenv('BREVO_API_KEY'));
