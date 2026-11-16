@@ -2,7 +2,8 @@
 
 Aplikasi Learning Management System (LMS) / Portal Akademik ringan berbasis **PHP 8.2+** dan **SQLite** (tanpa perlu MySQL/database eksternal). Dirancang responsif untuk desktop, tablet, dan ponsel dengan tampilan penuh, navigasi drawer di sebelah kiri pada layar kecil, serta dukungan peran terpisah antara **Mahasiswa** dan **Dosen**.
 
-- **Situs Produksi**: https://portal-akademik-production.up.railway.app
+- **Domain Utama**: https://portal.unira.ac.id *(memerlukan record DNS ke Railway)*
+- **URL Cadangan Railway**: https://portal-akademik-production.up.railway.app
 
 ## Fitur Utama
 
@@ -41,7 +42,7 @@ Aplikasi Learning Management System (LMS) / Portal Akademik ringan berbasis **PH
 | Dosen (Utama) | `dosen` | `dosen123` | `NIDN-0412088501` |
 | Dosen | `laksmi` | `serambi` | `NIDN-001` |
 
-> Untuk menyembunyikan panel akun demo pada halaman masuk di produksi, atur environment variable `SHOW_DEMO=0`.
+> Kotak akun demo pada halaman masuk disembunyikan secara bawaan. Untuk menampilkannya saat pengujian lokal, atur environment variable `SHOW_DEMO=1`.
 
 ## Menjalankan Secara Lokal
 

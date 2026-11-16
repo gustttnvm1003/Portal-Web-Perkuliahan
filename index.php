@@ -329,7 +329,7 @@ if ($page === 'masuk') {
     $flash = $_SESSION['flash'] ?? '';
     unset($_SESSION['flash']);
     $err = $flash ? '<p class="err">' . h($flash) . '</p>' : '';
-    $demoHtml = getenv('SHOW_DEMO') === '0' ? '' : '
+    $demoHtml = getenv('SHOW_DEMO') === '1' ? '
         <div class="demo">
             <p class="demo-head">Akun Demo Tersedia</p>
             <div class="demo-grid">
@@ -344,7 +344,7 @@ if ($page === 'masuk') {
                     <button type="button" class="btn-ghost-sm" data-fill-user="dosen" data-fill-pass="dosen123">Isi akun dosen</button>
                 </div>
             </div>
-        </div>';
+        </div>' : '';
     $html = '<form class="card auth-card" method="post" action="index.php?p=masuk">
         <p class="brand lone"><img class="logo" src="logo.svg" width="44" height="44" alt=""><span class="brand-text"><span class="brand-top">Universitas</span><span class="brand-bottom">Indramayu</span></span></p>
         ' . render_live_clock('live-clock-auth') . '
