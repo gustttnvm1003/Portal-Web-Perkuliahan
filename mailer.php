@@ -52,14 +52,17 @@ function send_otp_email(string $toEmail, string $toName, string $code, string $p
 
     $resendKey = trim((string) getenv('RESEND_API_KEY'));
     if ($resendKey !== '') {
-        return resend_send_mail($resendKey, $toEmail, $subject, $htmlBody, $textBody);
+        $res = resend_send_mail($resendKey, $toEmail, $subject, $htmlBody, $textBody);
+    } elseif (mail_transport_configured()) {
+        $res = smtp_send_mail($toEmail, $toName, $subject, $htmlBody, $textBody);
+    } else {
+        $res = ['ok' => false, 'provider' => 'none', 'error' => 'Transport email belum dikonfigurasi.'];
     }
 
-    if (mail_transport_configured()) {
-        return smtp_send_mail($toEmail, $toName, $subject, $htmlBody, $textBody);
+    if (!$res['ok']) {
+        @error_log('[serambi-mail] ' . $res['provider'] . ': ' . $res['error']);
     }
-
-    return ['ok' => false, 'provider' => 'none', 'error' => 'Transport email belum dikonfigurasi.'];
+    return $res;
 }
 
 function resend_send_mail(string $apiKey, string $toEmail, string $subject, string $htmlBody, string $textBody): array

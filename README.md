@@ -15,8 +15,8 @@ Aplikasi Learning Management System (LMS) / Portal Akademik ringan berbasis **PH
     - `Presensi Pertemuan` (`?p=dosen_presensi`) — mencatat kehadiran mahasiswa per pertemuan 1–16.
     - `Pengumuman & Mahasiswa` (`?p=dosen_pengumuman`) — menerbitkan/menghapus pengumuman kelas serta melihat daftar mahasiswa.
 - **Autentikasi Split-Screen, Daftar Mahasiswa & OTP Email (`?p=masuk`)**:
-  - Tata letak desktop dua kolom dengan panel info akademik di sisi kiri dan kartu masuk/daftar di sisi kanan (`Masuk`, `OTP Email`, `Daftar`, dan `Lupa kata sandi?`).
-  - Mendukung masuk dengan Nama Pengguna, NIM, NIDN, atau Email terdaftar, serta **Masuk via OTP Email** (6 digit) dan **Reset Kata Sandi via OTP Email**.
+  - Tata letak desktop dua kolom dengan panel info akademik di sisi kiri dan kartu masuk/daftar di sisi kanan (`Masuk` dan `Daftar`, serta pemulihan sandi via `Lupa kata sandi?`).
+  - Mendukung masuk dengan Nama Pengguna, NIM, NIDN, atau Email terdaftar serta **Reset Kata Sandi via OTP Email**.
   - Halaman **Daftar Akun Mahasiswa** (`?p=masuk&tab=daftar`) dilengkapi indikator kekuatan kata sandi (`0/8 karakter`) serta verifikasi **kode OTP 6 digit ke email** melalui [mailer.php](mailer.php) (mendukung **SMTP** Gmail/kampus maupun **Resend API**).
 - **Edit Profil & Foto Profil (`?p=profil`)**: Akun **Mahasiswa** maupun **Dosen** dapat mengubah foto profil (JPG/PNG/WebP/GIF maks. 4 MB dengan pratinjau langsung, serta opsi hapus foto), nama lengkap, nama pengguna, NIM/NIDN, program studi, email, nomor HP, bio singkat, dan sandi akun.
 - **Live Clock Real-Time**: Penunjuk tanggal & waktu aktif di header setiap halaman dan kartu masuk, dengan format Indonesia (`HH:MM:SS` tabular) serta deteksi zona waktu (`WIB`/`WITA`/`WIT`).
