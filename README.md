@@ -14,6 +14,7 @@ Aplikasi Learning Management System (LMS) / Portal Akademik ringan berbasis **PH
     - `Kelola Materi & Tugas` (`?p=dosen_materi`) — menyunting materi pertemuan 1–16, membuat/menghapus tugas, dan mereset status pengumpulan.
     - `Presensi Pertemuan` (`?p=dosen_presensi`) — mencatat kehadiran mahasiswa per pertemuan 1–16.
     - `Pengumuman & Mahasiswa` (`?p=dosen_pengumuman`) — menerbitkan/menghapus pengumuman kelas serta melihat daftar mahasiswa.
+- **Edit Profil & Foto Profil (`?p=profil`)**: Akun **Mahasiswa** maupun **Dosen** dapat mengubah foto profil (JPG/PNG/WebP/GIF maks. 4 MB dengan pratinjau langsung, serta opsi hapus foto), nama lengkap, nama pengguna, NIM/NIDN, program studi, email, nomor HP, bio singkat, dan sandi akun.
 - **Live Clock Real-Time**: Penunjuk tanggal & waktu aktif di header setiap halaman dan kartu masuk, dengan format Indonesia (`HH:MM:SS` tabular) serta deteksi zona waktu (`WIB`/`WITA`/`WIT`).
 - **UI Responsif & Drawer Kiri**: Sidebar permanen pada layar lebar (`> 900px`) dan slide-in drawer di sebelah kiri melalui tombol `☰` pada mobile/tablet (`<= 900px`), latar batik tetap diam saat scroll, serta metadata PWA (`manifest.webmanifest`).
 

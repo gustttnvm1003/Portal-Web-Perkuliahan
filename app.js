@@ -255,4 +255,36 @@
       }
     });
   }
+
+  // --- Pratinjau langsung foto profil sebelum diunggah ---
+  const avatarInput = document.querySelector("[data-avatar-input]");
+  const avatarPreview = document.querySelector("[data-avatar-preview]");
+  const avatarNote = document.querySelector("[data-avatar-note]");
+  if (avatarInput && avatarPreview) {
+    let previewUrl = "";
+    avatarInput.addEventListener("change", () => {
+      const file = avatarInput.files && avatarInput.files[0];
+      if (!file) return;
+      if (file.size > 4 * 1024 * 1024) {
+        if (avatarNote) {
+          avatarNote.textContent = `Ukuran berkas "${file.name}" melebihi batas 4 MB. Pilih gambar yang lebih kecil.`;
+        }
+        avatarInput.value = "";
+        return;
+      }
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      previewUrl = URL.createObjectURL(file);
+      avatarPreview.innerHTML = "";
+      const img = document.createElement("img");
+      img.className = "avatar-img";
+      img.src = previewUrl;
+      img.alt = "Pratinjau foto profil";
+      avatarPreview.appendChild(img);
+      if (avatarNote) {
+        avatarNote.textContent = `Pratinjau siap: ${file.name} — klik "Simpan Perubahan Profil" untuk menerapkan.`;
+      }
+    });
+  }
 })();

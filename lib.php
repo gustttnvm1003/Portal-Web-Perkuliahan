@@ -7,7 +7,7 @@ if (!defined('SERAMBI_APP')) {
 
 require_once __DIR__ . '/seed_data.php';
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 function data_dir(): string
 {
@@ -27,6 +27,15 @@ function db_path(): string
 function uploads_dir(): string
 {
     return data_dir() . DIRECTORY_SEPARATOR . 'uploads';
+}
+
+function avatars_dir(): string
+{
+    $dir = uploads_dir() . DIRECTORY_SEPARATOR . 'avatars';
+    if (!is_dir($dir)) {
+        mkdir($dir, 0775, true);
+    }
+    return $dir;
 }
 
 function db(): PDO
@@ -57,7 +66,12 @@ function seed(PDO $pdo): void
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL,
-            nim TEXT NOT NULL
+            nim TEXT NOT NULL,
+            avatar TEXT NOT NULL DEFAULT '',
+            email TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            prodi TEXT NOT NULL DEFAULT 'Teknik Informatika',
+            bio TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE courses (
             id TEXT PRIMARY KEY,
@@ -172,6 +186,20 @@ function ensure_schema(PDO $pdo): void
 
     $pdo->beginTransaction();
     try {
+        $userCols = array_column($pdo->query('PRAGMA table_info(users)')->fetchAll(), 'name');
+        $userColDefs = [
+            'avatar' => "TEXT NOT NULL DEFAULT ''",
+            'email' => "TEXT NOT NULL DEFAULT ''",
+            'phone' => "TEXT NOT NULL DEFAULT ''",
+            'prodi' => "TEXT NOT NULL DEFAULT 'Teknik Informatika'",
+            'bio' => "TEXT NOT NULL DEFAULT ''",
+        ];
+        foreach ($userColDefs as $colName => $colDef) {
+            if (!in_array($colName, $userCols, true)) {
+                $pdo->exec('ALTER TABLE users ADD COLUMN ' . $colName . ' ' . $colDef);
+            }
+        }
+
         $matCols = array_column($pdo->query('PRAGMA table_info(materials)')->fetchAll(), 'name');
         if (!in_array('kind', $matCols, true)) {
             $pdo->exec("ALTER TABLE materials ADD COLUMN kind TEXT NOT NULL DEFAULT 'materi'");
@@ -570,6 +598,50 @@ function render_live_clock(string $extraClass = ''): string
         . '</div>';
 }
 
+function user_initials(string $name): string
+{
+    $clean = trim((string) preg_replace('/,.*$/', '', $name));
+    $clean = trim((string) preg_replace('/^(?:(?:Dr|Prof|Ir|H|Hj)\.?\s+)+/iu', '', $clean));
+    $parts = preg_split('/\s+/u', $clean, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    $out = '';
+    foreach ($parts as $p) {
+        $ch = mb_substr($p, 0, 1);
+        if ($ch !== '') {
+            $out .= mb_strtoupper($ch);
+        }
+        if (mb_strlen($out) >= 2) {
+            break;
+        }
+    }
+    return $out !== '' ? $out : 'U';
+}
+
+function user_avatar_url(array $user): ?string
+{
+    $avatar = basename((string) ($user['avatar'] ?? ''));
+    if ($avatar === '' || empty($user['id'])) {
+        return null;
+    }
+    $path = avatars_dir() . DIRECTORY_SEPARATOR . $avatar;
+    if (!is_file($path)) {
+        return null;
+    }
+    return 'index.php?p=foto&id=' . (int) $user['id'] . '&v=' . (int) @filemtime($path);
+}
+
+function user_avatar_html(array $user, string $sizeClass = '', bool $previewTarget = false): string
+{
+    $cls = 'avatar-box' . ($sizeClass !== '' ? ' ' . $sizeClass : '');
+    $roleTone = is_dosen($user) ? ' is-dosen' : ' is-mhs';
+    $attr = $previewTarget ? ' data-avatar-preview' : '';
+    $url = user_avatar_url($user);
+    if ($url !== null) {
+        return '<span class="' . h($cls . $roleTone) . '"' . $attr . '><img class="avatar-img" src="' . h($url) . '" alt="' . h($user['name'] ?? 'Profil') . '"></span>';
+    }
+    $initials = user_initials((string) ($user['name'] ?? ''));
+    return '<span class="' . h($cls . $roleTone) . '"' . $attr . ' aria-hidden="true"><span class="avatar-fallback">' . h($initials) . '</span></span>';
+}
+
 function layout(string $title, string $body, ?array $user): void
 {
     $device = detect_device();
@@ -609,6 +681,9 @@ function layout(string $title, string $body, ?array $user): void
                 $nav .= '<a class="' . $on . '" href="index.php?p=' . $id . '"><span class="nav-ico" aria-hidden="true">' . $meta[1] . '</span><span>' . $meta[0] . '</span></a>';
             }
         }
+
+        $nav .= '<span class="nav-group-label">Akun</span>';
+        $nav .= '<a class="' . ($page === 'profil' ? 'is-on' : '') . '" href="index.php?p=profil"><span class="nav-ico" aria-hidden="true">◉</span><span>Profil Saya</span></a>';
     }
 
     $roleClass = $user ? (' role-' . ($isDosen ? 'dosen' : 'mahasiswa')) : '';
@@ -633,20 +708,25 @@ function layout(string $title, string $body, ?array $user): void
             ? '<span class="role-badge role-badge-dosen">Dosen Pengampu</span>'
             : '<span class="role-badge role-badge-mhs">Mahasiswa</span>';
         $portalLabel = $isDosen ? 'Portal Dosen · Pengampu' : 'Portal Mahasiswa';
+        $whoAvatar = user_avatar_html($user, 'avatar-md');
+        $mobileAvatar = user_avatar_html($user, 'avatar-sm');
 
         echo '<div class="app">';
         echo '<aside id="side-drawer">';
         echo '<div class="aside-head"><a class="brand" href="index.php?p=beranda"><img class="logo" src="logo.svg" width="36" height="36" alt=""><span class="brand-text"><span class="brand-top">Universitas</span><span class="brand-bottom">Indramayu</span></span></a><button type="button" class="drawer-close" aria-label="Tutup menu">×</button></div>';
         echo '<p class="muted term">Gasal 2026/2027</p>';
         echo '<nav class="side-nav" aria-label="Menu utama">' . $nav . '</nav>';
-        echo '<div class="who">' . $roleBadge . '<strong>' . h($user['name']) . '</strong><span>' . h($user['nim']) . ' · ' . h($user['role']) . '</span></div>';
+        echo '<a class="who' . ($page === 'profil' ? ' is-on' : '') . '" href="index.php?p=profil">'
+            . '<div class="who-row">' . $whoAvatar . '<div class="who-meta">' . $roleBadge . '<strong>' . h($user['name']) . '</strong><span>' . h($user['nim']) . ' · ' . h($user['role']) . '</span></div></div>'
+            . '<span class="who-edit">Edit Profil ›</span>'
+            . '</a>';
         echo '</aside>';
         echo '<div class="drawer-backdrop" aria-hidden="true"></div>';
 
         $back = $page !== 'beranda'
             ? '<a class="hdr-back" href="index.php?p=beranda" data-back>‹ Kembali</a>'
             : '';
-        $mobileWho = '<div class="mobile-who">' . $roleBadge . '<span class="mobile-who-name">' . h($user['name']) . '</span><span class="mobile-who-id">' . h($user['nim']) . '</span></div>';
+        $mobileWho = '<div class="mobile-who">' . $mobileAvatar . '<div class="mobile-who-info">' . $roleBadge . '<span class="mobile-who-name">' . h($user['name']) . '</span><span class="mobile-who-id">' . h($user['nim']) . '</span></div><a class="mobile-who-edit" href="index.php?p=profil">Edit Profil</a></div>';
         echo '<div class="main"><header><div class="hdr-left"><button type="button" class="nav-toggle" aria-label="Buka menu" aria-controls="side-drawer" aria-expanded="false">☰</button>' . $back . '<span class="muted hide-sm">' . $portalLabel . '</span><span class="hdr-title">' . h($title) . '</span></div><div class="hdr-right">' . render_live_clock() . '<a class="out" href="index.php?p=keluar">Keluar</a></div></header><div class="content">' . $mobileWho;
         echo $body;
         echo '</div></div>';

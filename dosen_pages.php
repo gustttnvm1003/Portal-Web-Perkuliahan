@@ -442,7 +442,7 @@ function render_dosen_page(string $page, PDO $pdo): bool
 
             $stuRows .= '<tr>'
                 . '<td data-label="NIM"><code>' . h($stu['nim']) . '</code></td>'
-                . '<td data-label="Mahasiswa"><strong>' . h($stu['name']) . '</strong><br><small class="muted">@' . h($stu['username']) . '</small></td>'
+                . '<td data-label="Mahasiswa"><div class="user-inline">' . user_avatar_html($stu, 'avatar-xs') . '<div><strong>' . h($stu['name']) . '</strong><br><small class="muted">@' . h($stu['username']) . '</small></div></div></td>'
                 . '<td data-label="Bacaan">' . $rCnt . '/' . $totalMaterials . '</td>'
                 . '<td data-label="Tugas">' . $sCnt . ' tugas</td>'
                 . '<td data-label="Hadir">' . $attText . '</td>'

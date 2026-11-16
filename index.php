@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
-require __DIR__ . '/lib.php';
-require __DIR__ . '/dosen_pages.php';
+require_once __DIR__ . '/lib.php';
+require_once __DIR__ . '/dosen_pages.php';
 
 start_session();
 $page = $_GET['p'] ?? 'beranda';
@@ -46,6 +46,29 @@ if ($page === 'unduh') {
     header('Content-Type: ' . $mime);
     header('Content-Length: ' . (string) filesize($path));
     header('Content-Disposition: inline; filename="' . str_replace('"', '', $name) . '"');
+    readfile($path);
+    exit;
+}
+
+if ($page === 'foto') {
+    $viewer = require_user();
+    $uid = (int) ($_GET['id'] ?? $viewer['id']);
+    $stmt = db()->prepare('SELECT id, avatar FROM users WHERE id = ?');
+    $stmt->execute([$uid]);
+    $row = $stmt->fetch();
+    $file = $row ? basename((string) ($row['avatar'] ?? '')) : '';
+    $path = $file !== '' ? avatars_dir() . DIRECTORY_SEPARATOR . $file : '';
+    if ($file === '' || !is_file($path)) {
+        http_response_code(404);
+        exit('Foto profil tidak ditemukan.');
+    }
+    $info = @getimagesize($path);
+    $allowedMime = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    $mime = ($info && in_array($info['mime'] ?? '', $allowedMime, true)) ? $info['mime'] : 'application/octet-stream';
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . (string) filesize($path));
+    header('Cache-Control: private, max-age=3600');
+    header('X-Content-Type-Options: nosniff');
     readfile($path);
     exit;
 }
@@ -192,6 +215,111 @@ if ($page === 'nilai_ujian_massal' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $upsert->execute([$id, $sid, $defaultBody, $now, $val, $fb]);
     }
     redirect(safe_return_url(db(), $id, $returnMat, 'ok=1'));
+}
+
+if ($page === 'profil_simpan' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = require_user();
+    check_csrf();
+    $pdo = db();
+
+    $name = trim((string) ($_POST['name'] ?? ''));
+    $username = trim((string) ($_POST['username'] ?? ''));
+    $nim = trim((string) ($_POST['nim'] ?? ''));
+    $prodi = trim((string) ($_POST['prodi'] ?? ''));
+    $email = trim((string) ($_POST['email'] ?? ''));
+    $phone = trim((string) ($_POST['phone'] ?? ''));
+    $bio = trim((string) ($_POST['bio'] ?? ''));
+
+    if (mb_strlen($name) < 2 || mb_strlen($name) > 100) {
+        redirect('index.php?p=profil&err=nama');
+    }
+    if (mb_strlen($username) < 3 || mb_strlen($username) > 60) {
+        redirect('index.php?p=profil&err=username');
+    }
+    $chkUser = $pdo->prepare('SELECT id FROM users WHERE username = ? AND id != ?');
+    $chkUser->execute([$username, (int) $user['id']]);
+    if ($chkUser->fetch()) {
+        redirect('index.php?p=profil&err=username_dipakai');
+    }
+    if ($nim === '' || mb_strlen($nim) > 40) {
+        redirect('index.php?p=profil&err=nim');
+    }
+    if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        redirect('index.php?p=profil&err=email');
+    }
+
+    $prodi = mb_substr($prodi, 0, 80);
+    $phone = mb_substr($phone, 0, 30);
+    $bio = mb_substr($bio, 0, 400);
+
+    $avatar = basename((string) ($user['avatar'] ?? ''));
+    $hasUploadAttempt = !empty($_FILES['avatar']['name'])
+        || (int) ($_FILES['avatar']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+    if ($hasUploadAttempt) {
+        $file = $_FILES['avatar'];
+        if ((int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || (int) ($file['size'] ?? 0) > 4 * 1024 * 1024) {
+            redirect('index.php?p=profil&err=foto');
+        }
+        $imgInfo = @getimagesize((string) $file['tmp_name']);
+        $imgMap = [
+            IMAGETYPE_JPEG => 'jpg',
+            IMAGETYPE_PNG => 'png',
+            IMAGETYPE_WEBP => 'webp',
+            IMAGETYPE_GIF => 'gif',
+        ];
+        $imgType = $imgInfo[2] ?? 0;
+        if (!$imgInfo || !isset($imgMap[$imgType])) {
+            redirect('index.php?p=profil&err=foto');
+        }
+        $dir = avatars_dir();
+        $stored = 'u' . (int) $user['id'] . '_' . bin2hex(random_bytes(6)) . '.' . $imgMap[$imgType];
+        $dest = $dir . DIRECTORY_SEPARATOR . $stored;
+        if (!move_uploaded_file((string) $file['tmp_name'], $dest)) {
+            redirect('index.php?p=profil&err=foto');
+        }
+        if ($avatar !== '' && is_file($dir . DIRECTORY_SEPARATOR . $avatar)) {
+            @unlink($dir . DIRECTORY_SEPARATOR . $avatar);
+        }
+        $avatar = $stored;
+    }
+
+    $upd = $pdo->prepare('UPDATE users SET name = ?, username = ?, nim = ?, prodi = ?, email = ?, phone = ?, bio = ?, avatar = ? WHERE id = ?');
+    $upd->execute([$name, $username, $nim, $prodi, $email, $phone, $bio, $avatar, (int) $user['id']]);
+    redirect('index.php?p=profil&ok=1');
+}
+
+if ($page === 'profil_hapus_foto' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = require_user();
+    check_csrf();
+    $old = basename((string) ($user['avatar'] ?? ''));
+    if ($old !== '') {
+        $oldPath = avatars_dir() . DIRECTORY_SEPARATOR . $old;
+        if (is_file($oldPath)) {
+            @unlink($oldPath);
+        }
+    }
+    db()->prepare("UPDATE users SET avatar = '' WHERE id = ?")->execute([(int) $user['id']]);
+    redirect('index.php?p=profil&ok=foto_dihapus');
+}
+
+if ($page === 'profil_sandi' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = require_user();
+    check_csrf();
+    $current = (string) ($_POST['current_password'] ?? '');
+    $new = (string) ($_POST['new_password'] ?? '');
+    $confirm = (string) ($_POST['confirm_password'] ?? '');
+
+    if (!password_verify($current, (string) $user['password_hash'])) {
+        redirect('index.php?p=profil&err=sandi_lama');
+    }
+    if (strlen($new) < 6) {
+        redirect('index.php?p=profil&err=sandi_pendek');
+    }
+    if ($new !== $confirm) {
+        redirect('index.php?p=profil&err=sandi_beda');
+    }
+    db()->prepare('UPDATE users SET password_hash = ? WHERE id = ?')->execute([password_hash($new, PASSWORD_DEFAULT), (int) $user['id']]);
+    redirect('index.php?p=profil&ok=sandi');
 }
 
 if ($page === 'masuk') {
@@ -896,7 +1024,7 @@ if ($page === 'nilai') {
             $pills .= '<a class="' . $cls . '" href="index.php?p=nilai&student=' . $sid . '">' . h($stu['name']) . ' (' . h($stu['nim']) . ')</a>';
             $summaryRows .= '<tr class="' . ($sid === $selectedId ? 'is-highlight' : '') . '">'
                 . '<td data-label="NIM"><code>' . h($stu['nim']) . '</code></td>'
-                . '<td data-label="Nama"><strong>' . h($stu['name']) . '</strong></td>'
+                . '<td data-label="Nama"><div class="user-inline">' . user_avatar_html($stu, 'avatar-xs') . '<strong>' . h($stu['name']) . '</strong></div></td>'
                 . '<td data-label="Dinilai">' . (int) $sStat['graded_count'] . ' komponen</td>'
                 . '<td data-label="SKS">' . (int) $sStat['sks'] . ' SKS</td>'
                 . '<td data-label="IPS"><strong>' . h($sStat['ips']) . '</strong></td>'
@@ -918,6 +1046,124 @@ if ($page === 'nilai') {
     }
 
     layout('Nilai', '<h1>Nilai sementara.</h1><p class="lede">Mencakup tugas mingguan, UTS (Pertemuan 6), dan UAS (Pertemuan 16). Bukan transkrip resmi.</p><div class="card ips"><p class="muted">Indeks Prestasi Sementara</p><p class="score">' . h($stats['ips']) . '</p></div><div class="grid grid-2">' . $blocks . '</div>', $user);
+    exit;
+}
+
+if ($page === 'profil') {
+    $idLabel = $isDosen ? 'NIDN' : 'NIM';
+    $roleBadge = $isDosen
+        ? '<span class="role-badge role-badge-dosen">Dosen Pengampu</span>'
+        : '<span class="role-badge role-badge-mhs">Mahasiswa</span>';
+    $prodiLabel = $isDosen ? 'Program Studi / Bidang Keahlian' : 'Program Studi';
+
+    $okCode = (string) ($_GET['ok'] ?? '');
+    $errCode = (string) ($_GET['err'] ?? '');
+    $okMap = [
+        '1' => 'Perubahan profil dan foto profil berhasil disimpan.',
+        'foto_dihapus' => 'Foto profil berhasil dihapus dan dikembalikan ke inisial.',
+        'sandi' => 'Sandi akun berhasil diperbarui.',
+    ];
+    $errMap = [
+        'nama' => 'Nama lengkap harus diisi (2–100 karakter).',
+        'username' => 'Nama pengguna login minimal 3 karakter (maks. 60 karakter).',
+        'username_dipakai' => 'Nama pengguna tersebut sudah dipakai akun lain.',
+        'nim' => $idLabel . ' tidak boleh kosong (maks. 40 karakter).',
+        'email' => 'Format alamat email tidak valid.',
+        'foto' => 'Foto profil harus berupa gambar JPG, PNG, WebP, atau GIF (maks. 4 MB).',
+        'sandi_lama' => 'Sandi saat ini tidak cocok.',
+        'sandi_pendek' => 'Sandi baru minimal 6 karakter.',
+        'sandi_beda' => 'Konfirmasi sandi baru tidak sama.',
+    ];
+    $alert = '';
+    if (isset($okMap[$okCode])) {
+        $alert = '<p class="okline">' . h($okMap[$okCode]) . '</p>';
+    } elseif (isset($errMap[$errCode])) {
+        $alert = '<p class="err">' . h($errMap[$errCode]) . '</p>';
+    }
+
+    $hasAvatar = user_avatar_url($user) !== null;
+    $removePhotoForm = $hasAvatar
+        ? '<form method="post" action="index.php?p=profil_hapus_foto" class="inline-form" data-confirm="Hapus foto profil saat ini?"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><button type="submit" class="btn-danger-sm">Hapus Foto</button></form>'
+        : '';
+
+    $prodiVal = trim((string) ($user['prodi'] ?? '')) !== '' ? (string) $user['prodi'] : 'Teknik Informatika';
+    $bioText = trim((string) ($user['bio'] ?? ''));
+
+    if ($isDosen) {
+        $mhsCnt = (int) $pdo->query("SELECT COUNT(*) FROM users WHERE role = 'mahasiswa'")->fetchColumn();
+        $annCnt = (int) $pdo->query('SELECT COUNT(*) FROM announcements')->fetchColumn();
+        $statSummary = '<div class="profile-stats-mini">'
+            . '<div><span>Peran Akun</span><strong>Dosen Pengampu</strong></div>'
+            . '<div><span>Mahasiswa Aktif</span><strong>' . $mhsCnt . '</strong></div>'
+            . '<div><span>Pengumuman Terbit</span><strong>' . $annCnt . '</strong></div>'
+            . '</div>';
+    } else {
+        $myStats = student_course_stats($pdo, (int) $user['id']);
+        $subCntStmt = $pdo->prepare('SELECT COUNT(*) FROM submissions WHERE user_id = ?');
+        $subCntStmt->execute([(int) $user['id']]);
+        $subCnt = (int) $subCntStmt->fetchColumn();
+        $statSummary = '<div class="profile-stats-mini">'
+            . '<div><span>Peran Akun</span><strong>Mahasiswa</strong></div>'
+            . '<div><span>Tugas Terkirim</span><strong>' . $subCnt . '</strong></div>'
+            . '<div><span>IPS Sementara</span><strong>' . h($myStats['ips']) . '</strong></div>'
+            . '</div>';
+    }
+
+    $html = '<p class="kicker">Akun · ' . h($isDosen ? 'Dosen Pengampu' : 'Mahasiswa') . '</p>';
+    $html .= '<h1>Profil & Foto Akun.</h1>';
+    $html .= '<p class="lede">Perbarui foto profil, identitas akademik, kontak, serta keamanan sandi akun Anda.</p>';
+    $html .= $alert;
+
+    $html .= '<section class="card profile-hero">'
+        . '<div class="profile-hero-main">'
+        . '<div class="profile-avatar-col">' . user_avatar_html($user, 'avatar-xl', true) . $removePhotoForm . '</div>'
+        . '<div class="profile-hero-info">'
+        . '<div class="profile-badges">' . $roleBadge . '<span class="badge-soft">' . h($prodiVal) . '</span></div>'
+        . '<h2>' . h($user['name']) . '</h2>'
+        . '<p class="muted">@' . h($user['username']) . ' · ' . $idLabel . ': <code>' . h($user['nim']) . '</code></p>'
+        . ($bioText !== '' ? '<p class="profile-bio-preview">' . nl2br(h($bioText)) . '</p>' : '<p class="muted">Belum ada bio singkat. Tambahkan catatan profil Anda di formulir di bawah.</p>')
+        . '</div>'
+        . '</div>'
+        . '</section>';
+
+    $html .= '<div class="split section-gap">';
+
+    $html .= '<section class="panel panel-accent">'
+        . '<div class="panel-head"><h2>Edit Profil & Foto</h2><span class="panel-hint">' . h($isDosen ? 'Data Dosen' : 'Data Mahasiswa') . '</span></div>'
+        . '<form method="post" action="index.php?p=profil_simpan" enctype="multipart/form-data" class="stack-form">'
+        . '<input type="hidden" name="csrf" value="' . h(csrf_token()) . '">'
+        . '<label>Foto Profil Baru (JPG, PNG, WebP, GIF · maks. 4 MB)<input type="file" name="avatar" accept="image/jpeg,image/png,image/webp,image/gif" data-avatar-input></label>'
+        . '<p class="muted avatar-hint" data-avatar-note>' . ($hasAvatar ? 'Pilih file gambar baru jika ingin mengganti foto profil saat ini.' : 'Belum ada foto terpasang. Unggah foto untuk mengganti avatar inisial.') . '</p>'
+        . '<label>Nama Lengkap<input name="name" value="' . h($user['name']) . '" maxlength="100" required></label>'
+        . '<div class="form-row-2">'
+        . '<label>Nama Pengguna (Login)<input name="username" value="' . h($user['username']) . '" minlength="3" maxlength="60" required></label>'
+        . '<label>' . $idLabel . '<input name="nim" value="' . h($user['nim']) . '" maxlength="40" required></label>'
+        . '</div>'
+        . '<small class="muted field-note">Nama pengguna dipakai saat masuk ke portal akademik.</small>'
+        . '<div class="form-row-2">'
+        . '<label>' . $prodiLabel . '<input name="prodi" value="' . h($prodiVal) . '" maxlength="80" placeholder="Teknik Informatika"></label>'
+        . '<label>No. HP / WhatsApp<input name="phone" value="' . h((string) ($user['phone'] ?? '')) . '" maxlength="30" placeholder="0812xxxxxxxx"></label>'
+        . '</div>'
+        . '<label>Alamat Email<input name="email" type="email" value="' . h((string) ($user['email'] ?? '')) . '" maxlength="120" placeholder="nama@unira.ac.id"></label>'
+        . '<label>Bio / Deskripsi Singkat<textarea name="bio" rows="3" maxlength="400" placeholder="Ceritakan minat riset, kelas, atau catatan singkat Anda...">' . h((string) ($user['bio'] ?? '')) . '</textarea></label>'
+        . '<button type="submit">Simpan Perubahan Profil</button>'
+        . '</form></section>';
+
+    $html .= '<section class="panel">'
+        . '<div class="panel-head"><h2>Keamanan & Sandi</h2><span class="panel-hint">Akun Aktif</span></div>'
+        . $statSummary
+        . '<form method="post" action="index.php?p=profil_sandi" class="stack-form">'
+        . '<input type="hidden" name="csrf" value="' . h(csrf_token()) . '">'
+        . '<label>Sandi Saat Ini<input name="current_password" type="password" autocomplete="current-password" required></label>'
+        . '<label>Sandi Baru (min. 6 karakter)<input name="new_password" type="password" minlength="6" autocomplete="new-password" required></label>'
+        . '<label>Konfirmasi Sandi Baru<input name="confirm_password" type="password" minlength="6" autocomplete="new-password" required></label>'
+        . '<button type="submit">Perbarui Sandi</button>'
+        . '</form>'
+        . '</section>';
+
+    $html .= '</div>';
+
+    layout('Profil Saya', $html, $user);
     exit;
 }
 
