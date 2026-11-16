@@ -93,7 +93,7 @@ if ($page === 'daftar_kirim_otp' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $chkEmail = $pdo->prepare("SELECT id FROM users WHERE email != '' AND LOWER(email) = LOWER(?) LIMIT 1");
     $chkEmail->execute([$email]);
     if ($chkEmail->fetch()) {
-        $_SESSION['flash'] = 'Email tersebut sudah terdaftar pada akun lain. Silakan masuk menggunakan OTP Email atau kata sandi.';
+        $_SESSION['flash'] = 'Email tersebut sudah terdaftar pada akun lain. Silakan masuk menggunakan email dan kata sandi Anda, atau klik Lupa kata sandi.';
         redirect('index.php?p=masuk&tab=daftar');
     }
 
