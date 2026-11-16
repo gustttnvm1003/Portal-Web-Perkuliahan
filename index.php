@@ -30,7 +30,7 @@ function auth_otp_error_text(array $res): string
         return 'Tunggu ' . $wait . ' detik sebelum mengirim ulang kode OTP.';
     }
     if ($err === 'mail_unconfigured') {
-        return 'Layanan kirim email OTP belum dikonfigurasi oleh admin (atur variabel SMTP_* atau RESEND_API_KEY pada server).';
+        return 'Layanan kirim email OTP belum dikonfigurasi oleh admin (atur GAS_WEBHOOK_URL, BREVO_API_KEY, RESEND_API_KEY, atau SMTP_* pada server).';
     }
     if ($err === 'mail_failed') {
         return 'Gagal mengirim email OTP ke alamat tersebut. Periksa konfigurasi SMTP / API Email server.';

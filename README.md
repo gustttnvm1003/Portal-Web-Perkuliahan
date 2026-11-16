@@ -17,7 +17,7 @@ Aplikasi Learning Management System (LMS) / Portal Akademik ringan berbasis **PH
 - **Autentikasi Split-Screen, Daftar Mahasiswa & OTP Email (`?p=masuk`)**:
   - Tata letak desktop dua kolom dengan panel info akademik di sisi kiri dan kartu masuk/daftar di sisi kanan (`Masuk` dan `Daftar`, serta pemulihan sandi via `Lupa kata sandi?`).
   - Mendukung masuk dengan Nama Pengguna, NIM, NIDN, atau Email terdaftar serta **Reset Kata Sandi via OTP Email**.
-  - Halaman **Daftar Akun Mahasiswa** (`?p=masuk&tab=daftar`) dilengkapi indikator kekuatan kata sandi (`0/8 karakter`) serta verifikasi **kode OTP 6 digit ke email** melalui [mailer.php](mailer.php) (mendukung **SMTP** Gmail/kampus maupun **Resend API**).
+  - Halaman **Daftar Akun Mahasiswa** (`?p=masuk&tab=daftar`) dilengkapi indikator kekuatan kata sandi (`0/8 karakter`) serta verifikasi **kode OTP 6 digit ke email** melalui [mailer.php](mailer.php) (mendukung **Google Apps Script**, **Brevo HTTP API**, **Resend API**, maupun **SMTP**).
 - **Edit Profil & Foto Profil (`?p=profil`)**: Akun **Mahasiswa** maupun **Dosen** dapat mengubah foto profil (JPG/PNG/WebP/GIF maks. 4 MB dengan pratinjau langsung, serta opsi hapus foto), nama lengkap, nama pengguna, NIM/NIDN, program studi, email, nomor HP, bio singkat, dan sandi akun.
 - **Live Clock Real-Time**: Penunjuk tanggal & waktu aktif di header setiap halaman dan kartu masuk, dengan format Indonesia (`HH:MM:SS` tabular) serta deteksi zona waktu (`WIB`/`WITA`/`WIT`).
 - **UI Responsif & Drawer Kiri**: Sidebar permanen pada layar lebar (`> 900px`) dan slide-in drawer di sebelah kiri melalui tombol `☰` pada mobile/tablet (`<= 900px`), latar batik tetap diam saat scroll, serta metadata PWA (`manifest.webmanifest`).
@@ -61,18 +61,42 @@ Lalu buka http://localhost:8000 di peramban. Basis data SQLite akan dibuat dan d
 
 ## Konfigurasi Pengiriman OTP Email
 
-Untuk mengirimkan kode OTP verifikasi ke kotak masuk pengguna secara nyata, atur salah satu metode berikut melalui environment variable:
+Untuk mengirimkan kode OTP verifikasi ke kotak masuk pengguna secara nyata (termasuk di Railway Free/Trial/Hobby yang memblokir port SMTP keluar `465`/`587`), gunakan jalur HTTPS berikut:
 
-1. **SMTP (Gmail App Password / SMTP Kampus / Brevo)**:
-   - `SMTP_HOST` (mis. `smtp.gmail.com`)
-   - `SMTP_PORT` (`465` SSL atau `587` STARTTLS)
-   - `SMTP_USER` (alamat email pengirim)
-   - `SMTP_PASS` (App Password / kata sandi SMTP)
-   - `SMTP_FROM` *(opsional)* dan `SMTP_FROM_NAME` *(opsional)*
-2. **Resend HTTPS API**:
-   - `RESEND_API_KEY` dan *(opsional)* `RESEND_FROM`
+1. **Google Apps Script Web App (`GAS_WEBHOOK_URL`) — Gratis langsung lewat Gmail Anda**:
+   - Buka `https://script.google.com` dengan akun Gmail pengirim → buat proyek baru → tempel kode di bawah → **Deploy → Web app** (*Execute as: Me*, *Who has access: Anyone*), lalu pasang URL `/exec`-nya di `GAS_WEBHOOK_URL` (dan opsional `GAS_WEBHOOK_SECRET`).
+   ```javascript
+   const SECRET = ''; // Opsional, samakan dengan GAS_WEBHOOK_SECRET jika diisi
+   function doPost(e) {
+     try {
+       const data = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+       if (SECRET && data.secret !== SECRET) {
+         return jsonOut({ ok: false, error: 'Secret tidak cocok' });
+       }
+       MailApp.sendEmail({
+         to: String(data.to || ''),
+         subject: String(data.subject || ''),
+         body: String(data.text || ''),
+         htmlBody: String(data.html || ''),
+         name: String(data.name || 'Portal Akademik UNIRA'),
+       });
+       return jsonOut({ ok: true });
+     } catch (err) {
+       return jsonOut({ ok: false, error: String(err) });
+     }
+   }
+   function jsonOut(obj) {
+     return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+   }
+   ```
+2. **Brevo HTTP API (`BREVO_API_KEY`) — Gratis 300 email/hari tanpa perlu domain sendiri**:
+   - Verifikasi email pengirim Gmail di dashboard Brevo → salin API key (`xkeysib-...`) ke `BREVO_API_KEY`, dan atur `BREVO_SENDER_EMAIL` (otomatis fallback ke `SMTP_USER`).
+3. **Resend HTTPS API (`RESEND_API_KEY`)**:
+   - `RESEND_API_KEY` dan *(opsional)* `RESEND_FROM` (butuh verifikasi domain sendiri untuk mengirim ke email selain pemilik akun Resend).
+4. **SMTP langsung (untuk `localhost` atau Railway Pro+)**:
+   - `SMTP_HOST`, `SMTP_PORT` (`465` SSL atau `587` STARTTLS), `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` *(opsional)*, `SMTP_FROM_NAME` *(opsional)*.
 
-> Untuk pengujian lokal tanpa SMTP, set `OTP_DEV_PREVIEW=1`.
+> Untuk pengujian lokal tanpa pengiriman email keluar, set `OTP_DEV_PREVIEW=1`.
 
 ## Deployment (Docker / Railway)
 
@@ -89,7 +113,7 @@ Proyek ini sudah menyertakan [Dockerfile](Dockerfile) berbasis `php:8.2-cli` dan
 ├── index.php             # Router utama, autentikasi split-screen & alur mahasiswa
 ├── lib.php               # Koneksi SQLite, skema, OTP helpers, sesi/CSRF, layout & live clock
 ├── dosen_pages.php       # Handler & tampilan khusus dosen
-├── mailer.php            # Pengirim email OTP via Resend API atau SMTP SSL/STARTTLS
+├── mailer.php            # Pengirim email OTP via Google Apps Script, Brevo, Resend API, atau SMTP
 ├── seed_data.php         # Seed 8 mata kuliah, silabus P1–P16, tugas & ujian
 ├── router.php            # Front-controller PHP built-in server & endpoint /health
 ├── app.css               # Gaya antarmuka, split auth, tema ungu-batik, drawer & responsivitas

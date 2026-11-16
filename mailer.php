@@ -7,12 +7,17 @@ if (!defined('SERAMBI_APP')) {
 }
 
 /**
- * Mengecek apakah layanan kirim email nyata (Resend API atau SMTP) sudah dikonfigurasi.
+ * Mengecek apakah layanan kirim email nyata (Google Apps Script, Brevo API, Resend API, atau SMTP) sudah dikonfigurasi.
  */
 function mail_transport_configured(): bool
 {
-    $resendKey = trim((string) getenv('RESEND_API_KEY'));
-    if ($resendKey !== '') {
+    if (trim((string) getenv('GAS_WEBHOOK_URL')) !== '') {
+        return true;
+    }
+    if (trim((string) getenv('BREVO_API_KEY')) !== '') {
+        return true;
+    }
+    if (trim((string) getenv('RESEND_API_KEY')) !== '') {
         return true;
     }
     $host = trim((string) getenv('SMTP_HOST'));
@@ -22,7 +27,7 @@ function mail_transport_configured(): bool
 }
 
 /**
- * Mengirim kode OTP ke email tujuan menggunakan Resend API atau SMTP.
+ * Mengirim kode OTP ke email tujuan menggunakan Google Apps Script, Brevo HTTP API, Resend API, atau SMTP.
  *
  * @return array{ok:bool,provider:string,error:string}
  */
@@ -50,8 +55,15 @@ function send_otp_email(string $toEmail, string $toName, string $code, string $p
         . '<p style="margin:0;font-size:13px;line-height:1.5;color:#5c5470;">Kode berlaku selama <strong>10 menit</strong>. Demi keamanan akun, jangan bagikan kode ini kepada siapa pun.</p>'
         . '</div></body></html>';
 
+    $gasUrl = trim((string) getenv('GAS_WEBHOOK_URL'));
+    $brevoKey = trim((string) getenv('BREVO_API_KEY'));
     $resendKey = trim((string) getenv('RESEND_API_KEY'));
-    if ($resendKey !== '') {
+
+    if ($gasUrl !== '') {
+        $res = gas_send_mail($gasUrl, $toEmail, $subject, $htmlBody, $textBody);
+    } elseif ($brevoKey !== '') {
+        $res = brevo_send_mail($brevoKey, $toEmail, $toName, $subject, $htmlBody, $textBody);
+    } elseif ($resendKey !== '') {
         $res = resend_send_mail($resendKey, $toEmail, $subject, $htmlBody, $textBody);
     } elseif (mail_transport_configured()) {
         $res = smtp_send_mail($toEmail, $toName, $subject, $htmlBody, $textBody);
@@ -65,38 +77,114 @@ function send_otp_email(string $toEmail, string $toName, string $code, string $p
     return $res;
 }
 
-function resend_send_mail(string $apiKey, string $toEmail, string $subject, string $htmlBody, string $textBody): array
+/**
+ * Helper cURL JSON POST bersama untuk seluruh transport email berbasis HTTPS.
+ *
+ * @return array{ok:bool,code:int,body:string,error:string}
+ */
+function http_post_json(string $url, array $headers, array $payload, bool $followRedirects = false): array
 {
     if (!function_exists('curl_init')) {
-        return ['ok' => false, 'provider' => 'resend', 'error' => 'Ekstensi cURL PHP tidak tersedia.'];
+        return ['ok' => false, 'code' => 0, 'body' => '', 'error' => 'Ekstensi cURL PHP tidak tersedia.'];
     }
-    $from = trim((string) getenv('RESEND_FROM')) ?: 'Portal Akademik UNIRA <onboarding@resend.dev>';
-    $payload = json_encode([
-        'from' => $from,
-        'to' => [$toEmail],
-        'subject' => $subject,
-        'html' => $htmlBody,
-        'text' => $textBody,
-    ], JSON_UNESCAPED_UNICODE);
-
-    $ch = curl_init('https://api.resend.com/emails');
+    $bodyJson = json_encode($payload, JSON_UNESCAPED_UNICODE);
+    $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST => true,
-        CURLOPT_TIMEOUT => 12,
-        CURLOPT_HTTPHEADER => [
-            'Authorization: Bearer ' . $apiKey,
-            'Content-Type: application/json',
-        ],
-        CURLOPT_POSTFIELDS => $payload,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_TIMEOUT => 15,
+        CURLOPT_FOLLOWLOCATION => $followRedirects,
+        CURLOPT_MAXREDIRS => 5,
+        CURLOPT_HTTPHEADER => array_merge(['Content-Type: application/json'], $headers),
+        CURLOPT_POSTFIELDS => $bodyJson !== false ? $bodyJson : '{}',
     ]);
     $resp = curl_exec($ch);
     $err = curl_error($ch);
     $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
+    unset($ch);
 
     if ($resp === false || $code < 200 || $code >= 300) {
-        return ['ok' => false, 'provider' => 'resend', 'error' => $err ?: ('Resend HTTP ' . $code . ': ' . (string) $resp)];
+        return [
+            'ok' => false,
+            'code' => $code,
+            'body' => (string) $resp,
+            'error' => $err ?: ('HTTP ' . $code . ': ' . substr((string) $resp, 0, 300)),
+        ];
+    }
+    return ['ok' => true, 'code' => $code, 'body' => (string) $resp, 'error' => ''];
+}
+
+function gas_send_mail(string $webhookUrl, string $toEmail, string $subject, string $htmlBody, string $textBody): array
+{
+    $secret = trim((string) getenv('GAS_WEBHOOK_SECRET'));
+    $fromName = trim((string) getenv('SMTP_FROM_NAME')) ?: 'Portal Akademik UNIRA';
+    $payload = [
+        'secret' => $secret,
+        'to' => $toEmail,
+        'subject' => $subject,
+        'html' => $htmlBody,
+        'text' => $textBody,
+        'name' => $fromName,
+    ];
+
+    $res = http_post_json($webhookUrl, ['Accept: application/json'], $payload, true);
+    if (!$res['ok']) {
+        return ['ok' => false, 'provider' => 'gas', 'error' => 'GAS ' . $res['error']];
+    }
+    $json = json_decode($res['body'], true);
+    if (!is_array($json)) {
+        return ['ok' => false, 'provider' => 'gas', 'error' => 'GAS tidak mengembalikan JSON valid (pastikan akses Web App diset ke Anyone / Siapa saja).'];
+    }
+    if (empty($json['ok'])) {
+        return ['ok' => false, 'provider' => 'gas', 'error' => 'GAS error: ' . (string) ($json['error'] ?? 'gagal mengirim')];
+    }
+    return ['ok' => true, 'provider' => 'gas', 'error' => ''];
+}
+
+function brevo_send_mail(string $apiKey, string $toEmail, string $toName, string $subject, string $htmlBody, string $textBody): array
+{
+    $senderEmail = trim((string) getenv('BREVO_SENDER_EMAIL')) ?: trim((string) getenv('SMTP_USER'));
+    if ($senderEmail === '') {
+        return ['ok' => false, 'provider' => 'brevo', 'error' => 'BREVO_SENDER_EMAIL (atau SMTP_USER) wajib diisi.'];
+    }
+    $senderName = trim((string) getenv('BREVO_SENDER_NAME')) ?: (trim((string) getenv('SMTP_FROM_NAME')) ?: 'Portal Akademik UNIRA');
+
+    $payload = [
+        'sender' => ['name' => $senderName, 'email' => $senderEmail],
+        'to' => [['email' => $toEmail, 'name' => $toName !== '' ? $toName : $toEmail]],
+        'subject' => $subject,
+        'htmlContent' => $htmlBody,
+        'textContent' => $textBody,
+    ];
+
+    $res = http_post_json('https://api.brevo.com/v3/smtp/email', [
+        'api-key: ' . $apiKey,
+        'Accept: application/json',
+    ], $payload);
+    if (!$res['ok']) {
+        return ['ok' => false, 'provider' => 'brevo', 'error' => 'Brevo ' . $res['error']];
+    }
+    return ['ok' => true, 'provider' => 'brevo', 'error' => ''];
+}
+
+function resend_send_mail(string $apiKey, string $toEmail, string $subject, string $htmlBody, string $textBody): array
+{
+    $from = trim((string) getenv('RESEND_FROM')) ?: 'Portal Akademik UNIRA <onboarding@resend.dev>';
+    $payload = [
+        'from' => $from,
+        'to' => [$toEmail],
+        'subject' => $subject,
+        'html' => $htmlBody,
+        'text' => $textBody,
+    ];
+
+    $res = http_post_json('https://api.resend.com/emails', [
+        'Authorization: Bearer ' . $apiKey,
+    ], $payload);
+    if (!$res['ok']) {
+        return ['ok' => false, 'provider' => 'resend', 'error' => 'Resend ' . $res['error']];
     }
     return ['ok' => true, 'provider' => 'resend', 'error' => ''];
 }
