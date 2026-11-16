@@ -2,8 +2,7 @@
 
 Aplikasi Learning Management System (LMS) / Portal Akademik ringan berbasis **PHP 8.2+** dan **SQLite** (tanpa perlu MySQL/database eksternal). Dirancang responsif untuk desktop, tablet, dan ponsel dengan tampilan penuh, navigasi drawer di sebelah kiri pada layar kecil, serta dukungan peran terpisah antara **Mahasiswa** dan **Dosen**.
 
-- **Domain Utama**: https://portal.unira.ac.id *(memerlukan record DNS ke Railway)*
-- **URL Cadangan Railway**: https://portal-akademik-production.up.railway.app
+- **Situs Produksi**: https://portal-unira.up.railway.app
 
 ## Fitur Utama
 
