@@ -16,7 +16,7 @@ if (
     preg_match('#(^|/)\.#', $cleanPath)
     || preg_match('#^/data(/|$)#i', $cleanPath)
     || preg_match('#\.(sqlite|sqlite3|db|log|md|json|lock)$#i', $cleanPath)
-    || in_array(strtolower($cleanPath), ['/dockerfile', '/router.php', '/lib.php', '/seed_data.php', '/dosen_pages.php'], true)
+    || in_array(strtolower($cleanPath), ['/dockerfile', '/router.php', '/lib.php', '/seed_data.php', '/dosen_pages.php', '/mailer.php'], true)
 ) {
     if ($cleanPath !== '/manifest.webmanifest') {
         http_response_code(403);

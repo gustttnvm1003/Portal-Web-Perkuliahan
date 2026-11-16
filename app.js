@@ -287,4 +287,70 @@
       }
     });
   }
+
+  // --- Toggle tampil/sembunyi kata sandi ---
+  document.querySelectorAll("[data-toggle-pass]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.getAttribute("data-toggle-pass");
+      const input = targetId ? document.getElementById(targetId) : null;
+      if (!input) return;
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      btn.setAttribute("aria-pressed", show ? "true" : "false");
+      btn.setAttribute("aria-label", show ? "Sembunyikan kata sandi" : "Tampilkan kata sandi");
+      btn.classList.toggle("is-visible", show);
+    });
+  });
+
+  // --- Indikator kekuatan kata sandi & penghitung karakter ---
+  document.querySelectorAll("[data-pass-input]").forEach((input) => {
+    const field = input.closest(".auth-field");
+    const meter = field ? field.querySelector("[data-pass-meter]") : null;
+    if (!meter) return;
+    const bars = Array.from(meter.querySelectorAll(".pass-bars span"));
+    const labelEl = meter.querySelector("[data-pass-label]");
+    const countEl = meter.querySelector("[data-pass-count]");
+
+    const refreshMeter = () => {
+      const val = input.value || "";
+      const len = val.length;
+      let score = 0;
+      if (len > 0) score = 1;
+      if (len >= 6) score = 2;
+      if (len >= 8 && (/[A-Z]/.test(val) || /[0-9]/.test(val))) score = 3;
+      if (len >= 10 && /[A-Z]/.test(val) && /[0-9]/.test(val) && /[^A-Za-z0-9]/.test(val)) score = 4;
+      if (len >= 8 && score < 3) score = 3;
+
+      const states = ["", "is-weak", "is-fair", "is-good", "is-strong"];
+      meter.classList.remove("is-weak", "is-fair", "is-good", "is-strong");
+      if (score > 0) {
+        meter.classList.add(states[score]);
+      }
+      bars.forEach((b, idx) => b.classList.toggle("is-lit", idx < score));
+
+      if (countEl) {
+        countEl.textContent = len >= 8 ? `${len}/8+ karakter` : `${len}/8 karakter`;
+        countEl.classList.toggle("is-ready", len >= 8);
+      }
+      if (labelEl) {
+        if (len === 0) labelEl.textContent = "Minimal 8 karakter";
+        else if (len < 8) labelEl.textContent = `Kurang ${8 - len} karakter lagi`;
+        else if (score === 4) labelEl.textContent = "Kata sandi kuat";
+        else labelEl.textContent = "Panjang memenuhi syarat";
+      }
+    };
+
+    input.addEventListener("input", refreshMeter);
+    refreshMeter();
+  });
+
+  // --- Normalisasi input OTP 6 digit ---
+  document.querySelectorAll("[data-otp-input]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const digits = (input.value || "").replace(/\D+/g, "").slice(0, 6);
+      if (input.value !== digits) {
+        input.value = digits;
+      }
+    });
+  });
 })();

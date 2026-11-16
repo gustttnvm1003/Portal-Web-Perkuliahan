@@ -10,16 +10,274 @@ if ($page === 'masuk' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     check_csrf();
     $username = trim((string) ($_POST['username'] ?? ''));
     $password = (string) ($_POST['password'] ?? '');
-    $stmt = db()->prepare('SELECT * FROM users WHERE username = ?');
-    $stmt->execute([$username]);
+    $stmt = db()->prepare("SELECT * FROM users WHERE username = ? OR nim = ? OR (email != '' AND LOWER(email) = LOWER(?)) LIMIT 1");
+    $stmt->execute([$username, $username, $username]);
     $user = $stmt->fetch();
     if ($user && password_verify($password, $user['password_hash'])) {
         session_regenerate_id(true);
         $_SESSION['uid'] = (int) $user['id'];
         redirect('index.php?p=beranda');
     }
-    $_SESSION['flash'] = 'Nama pengguna atau sandi tidak cocok.';
-    redirect('index.php?p=masuk');
+    $_SESSION['flash'] = 'NIM, NIDN, email, atau kata sandi tidak cocok.';
+    redirect('index.php?p=masuk&tab=login');
+}
+
+function auth_otp_error_text(array $res): string
+{
+    $err = (string) ($res['err'] ?? '');
+    if ($err === 'cooldown') {
+        $wait = max(1, (int) ($res['wait'] ?? 45));
+        return 'Tunggu ' . $wait . ' detik sebelum mengirim ulang kode OTP.';
+    }
+    if ($err === 'mail_unconfigured') {
+        return 'Layanan kirim email OTP belum dikonfigurasi oleh admin (atur variabel SMTP_* atau RESEND_API_KEY pada server).';
+    }
+    if ($err === 'mail_failed') {
+        return 'Gagal mengirim email OTP ke alamat tersebut. Periksa konfigurasi SMTP / API Email server.';
+    }
+    if ($err === 'expired') {
+        return 'Kode OTP sudah kedaluwarsa (lebih dari 10 menit). Silakan kirim ulang kode OTP.';
+    }
+    if ($err === 'too_many') {
+        return 'Terlalu banyak percobaan OTP yang salah. Silakan minta kode OTP baru.';
+    }
+    if ($err === 'not_found') {
+        return 'Belum ada kode OTP aktif untuk email tersebut. Silakan kirim OTP terlebih dahulu.';
+    }
+    return 'Kode OTP 6 digit tidak valid.';
+}
+
+if ($page === 'daftar_kirim_otp' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    check_csrf();
+    $pdo = db();
+    $isResend = !empty($_POST['resend']) && !empty($_SESSION['reg_pending']['password_hash']);
+    if ($isResend) {
+        $pending = $_SESSION['reg_pending'];
+        $name = (string) $pending['name'];
+        $nim = (string) $pending['nim'];
+        $email = (string) $pending['email'];
+        $passHash = (string) $pending['password_hash'];
+    } else {
+        $name = trim((string) ($_POST['name'] ?? ''));
+        $nim = trim((string) ($_POST['nim'] ?? ''));
+        $email = normalize_email((string) ($_POST['email'] ?? ''));
+        $password = (string) ($_POST['password'] ?? '');
+
+        $_SESSION['reg_draft'] = ['name' => $name, 'nim' => $nim, 'email' => $email];
+
+        if (mb_strlen($name) < 2 || mb_strlen($name) > 100) {
+            $_SESSION['flash'] = 'Nama lengkap harus diisi (2–100 karakter).';
+            redirect('index.php?p=masuk&tab=daftar');
+        }
+        if (!preg_match('/^[A-Za-z0-9._-]{4,40}$/', $nim)) {
+            $_SESSION['flash'] = 'NIM mahasiswa minimal 4 karakter (huruf, angka, titik, atau tanda hubung tanpa spasi).';
+            redirect('index.php?p=masuk&tab=daftar');
+        }
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $_SESSION['flash'] = 'Masukkan alamat email pribadi / Gmail yang valid.';
+            redirect('index.php?p=masuk&tab=daftar');
+        }
+        if (strlen($password) < 8) {
+            $_SESSION['flash'] = 'Kata sandi pendaftaran minimal 8 karakter.';
+            redirect('index.php?p=masuk&tab=daftar');
+        }
+        $passHash = password_hash($password, PASSWORD_DEFAULT);
+    }
+
+    $chkNim = $pdo->prepare('SELECT id FROM users WHERE nim = ? OR username = ? LIMIT 1');
+    $chkNim->execute([$nim, $nim]);
+    if ($chkNim->fetch()) {
+        $_SESSION['flash'] = 'NIM tersebut sudah terdaftar. Silakan masuk atau gunakan NIM lain.';
+        redirect('index.php?p=masuk&tab=daftar');
+    }
+    $chkEmail = $pdo->prepare("SELECT id FROM users WHERE email != '' AND LOWER(email) = LOWER(?) LIMIT 1");
+    $chkEmail->execute([$email]);
+    if ($chkEmail->fetch()) {
+        $_SESSION['flash'] = 'Email tersebut sudah terdaftar pada akun lain. Silakan masuk menggunakan OTP Email atau kata sandi.';
+        redirect('index.php?p=masuk&tab=daftar');
+    }
+
+    $payload = [
+        'name' => $name,
+        'nim' => $nim,
+        'password_hash' => $passHash,
+    ];
+    $otpRes = issue_email_otp($pdo, $email, 'register', $name, $payload);
+    if (!$otpRes['ok']) {
+        $_SESSION['flash'] = auth_otp_error_text($otpRes);
+        redirect('index.php?p=masuk&tab=daftar' . ($isResend ? '&step=otp' : ''));
+    }
+
+    $_SESSION['reg_pending'] = [
+        'name' => $name,
+        'nim' => $nim,
+        'email' => $email,
+        'password_hash' => $passHash,
+        'sent_at' => time(),
+        'preview_code' => $otpRes['preview_code'] ?? null,
+    ];
+    $_SESSION['flash_ok'] = 'Kode OTP 6 digit telah dikirim ke ' . $email . '. Berlaku selama 10 menit.';
+    redirect('index.php?p=masuk&tab=daftar&step=otp');
+}
+
+if ($page === 'daftar_verifikasi' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    check_csrf();
+    $pdo = db();
+    $pending = $_SESSION['reg_pending'] ?? null;
+    $email = normalize_email((string) ($pending['email'] ?? ($_POST['email'] ?? '')));
+    $otp = (string) ($_POST['otp'] ?? '');
+
+    if ($email === '') {
+        $_SESSION['flash'] = 'Sesi pendaftaran tidak ditemukan. Silakan isi data pendaftaran lagi.';
+        redirect('index.php?p=masuk&tab=daftar');
+    }
+
+    $ver = verify_email_otp($pdo, $email, 'register', $otp);
+    if (!$ver['ok']) {
+        $_SESSION['flash'] = auth_otp_error_text($ver);
+        redirect('index.php?p=masuk&tab=daftar&step=otp');
+    }
+
+    $payload = $ver['payload'] ?? [];
+    $name = trim((string) ($payload['name'] ?? ($pending['name'] ?? '')));
+    $nim = trim((string) ($payload['nim'] ?? ($pending['nim'] ?? '')));
+    $passHash = (string) ($payload['password_hash'] ?? '');
+    if ($name === '' || $nim === '' || $passHash === '') {
+        $_SESSION['flash'] = 'Data pendaftaran tidak lengkap. Silakan ulangi pendaftaran.';
+        redirect('index.php?p=masuk&tab=daftar');
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $chkDup = $pdo->prepare("SELECT id FROM users WHERE nim = ? OR username = ? OR (email != '' AND LOWER(email) = LOWER(?)) LIMIT 1");
+        $chkDup->execute([$nim, $nim, $email]);
+        if ($chkDup->fetch()) {
+            $pdo->rollBack();
+            $_SESSION['flash'] = 'NIM atau email sudah digunakan oleh akun lain.';
+            redirect('index.php?p=masuk&tab=daftar');
+        }
+        $ins = $pdo->prepare("INSERT INTO users (name, username, password_hash, role, nim, email, prodi) VALUES (?, ?, ?, 'mahasiswa', ?, ?, 'Teknik Informatika')");
+        $ins->execute([$name, $nim, $passHash, $nim, $email]);
+        $newId = (int) $pdo->lastInsertId();
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        $_SESSION['flash'] = 'Pendaftaran gagal disimpan. Silakan coba lagi.';
+        redirect('index.php?p=masuk&tab=daftar');
+    }
+
+    unset($_SESSION['reg_pending'], $_SESSION['reg_draft']);
+    session_regenerate_id(true);
+    $_SESSION['uid'] = $newId;
+    redirect('index.php?p=beranda');
+}
+
+if ($page === 'otp_kirim' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    check_csrf();
+    $pdo = db();
+    $purpose = (string) ($_POST['purpose'] ?? 'login');
+    if (!in_array($purpose, ['login', 'reset'], true)) {
+        $purpose = 'login';
+    }
+    $tab = $purpose === 'reset' ? 'lupa' : 'otp';
+    $email = normalize_email((string) ($_POST['email'] ?? ''));
+
+    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $_SESSION['flash'] = 'Masukkan alamat email yang valid.';
+        redirect('index.php?p=masuk&tab=' . $tab);
+    }
+
+    $stmt = $pdo->prepare("SELECT id, name, email FROM users WHERE email != '' AND LOWER(email) = LOWER(?) LIMIT 1");
+    $stmt->execute([$email]);
+    $targetUser = $stmt->fetch();
+    if (!$targetUser) {
+        $_SESSION['flash'] = 'Email tersebut belum terdaftar pada akun mana pun. Silakan daftar atau lengkapi email di menu Profil Saya.';
+        redirect('index.php?p=masuk&tab=' . $tab);
+    }
+
+    $otpRes = issue_email_otp($pdo, (string) $targetUser['email'], $purpose, (string) $targetUser['name'], ['user_id' => (int) $targetUser['id']]);
+    if (!$otpRes['ok']) {
+        $_SESSION['flash'] = auth_otp_error_text($otpRes);
+        redirect('index.php?p=masuk&tab=' . $tab);
+    }
+
+    $_SESSION['otp_pending_' . $purpose] = [
+        'email' => normalize_email((string) $targetUser['email']),
+        'sent_at' => time(),
+        'preview_code' => $otpRes['preview_code'] ?? null,
+    ];
+    $_SESSION['flash_ok'] = 'Kode OTP 6 digit telah dikirim ke ' . $targetUser['email'] . '. Berlaku 10 menit.';
+    redirect('index.php?p=masuk&tab=' . $tab . '&step=verif');
+}
+
+if ($page === 'otp_login_verif' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    check_csrf();
+    $pdo = db();
+    $pending = $_SESSION['otp_pending_login'] ?? null;
+    $email = normalize_email((string) ($pending['email'] ?? ($_POST['email'] ?? '')));
+    $otp = (string) ($_POST['otp'] ?? '');
+
+    if ($email === '') {
+        $_SESSION['flash'] = 'Masukkan email dan minta kode OTP terlebih dahulu.';
+        redirect('index.php?p=masuk&tab=otp');
+    }
+
+    $ver = verify_email_otp($pdo, $email, 'login', $otp);
+    if (!$ver['ok']) {
+        $_SESSION['flash'] = auth_otp_error_text($ver);
+        redirect('index.php?p=masuk&tab=otp&step=verif');
+    }
+
+    $uid = (int) ($ver['payload']['user_id'] ?? 0);
+    $stmt = $pdo->prepare('SELECT id FROM users WHERE id = ? LIMIT 1');
+    $stmt->execute([$uid]);
+    $foundId = (int) $stmt->fetchColumn();
+    if ($foundId <= 0) {
+        $_SESSION['flash'] = 'Akun tidak ditemukan.';
+        redirect('index.php?p=masuk&tab=otp');
+    }
+
+    unset($_SESSION['otp_pending_login']);
+    session_regenerate_id(true);
+    $_SESSION['uid'] = $foundId;
+    redirect('index.php?p=beranda');
+}
+
+if ($page === 'lupa_verifikasi' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    check_csrf();
+    $pdo = db();
+    $pending = $_SESSION['otp_pending_reset'] ?? null;
+    $email = normalize_email((string) ($pending['email'] ?? ($_POST['email'] ?? '')));
+    $otp = (string) ($_POST['otp'] ?? '');
+    $newPass = (string) ($_POST['new_password'] ?? '');
+    $confirmPass = (string) ($_POST['confirm_password'] ?? '');
+
+    if ($email === '') {
+        $_SESSION['flash'] = 'Masukkan email terdaftar dan minta kode OTP reset terlebih dahulu.';
+        redirect('index.php?p=masuk&tab=lupa');
+    }
+    if (strlen($newPass) < 8) {
+        $_SESSION['flash'] = 'Kata sandi baru minimal 8 karakter.';
+        redirect('index.php?p=masuk&tab=lupa&step=verif');
+    }
+    if ($newPass !== $confirmPass) {
+        $_SESSION['flash'] = 'Konfirmasi kata sandi baru tidak sama.';
+        redirect('index.php?p=masuk&tab=lupa&step=verif');
+    }
+
+    $ver = verify_email_otp($pdo, $email, 'reset', $otp);
+    if (!$ver['ok']) {
+        $_SESSION['flash'] = auth_otp_error_text($ver);
+        redirect('index.php?p=masuk&tab=lupa&step=verif');
+    }
+
+    $uid = (int) ($ver['payload']['user_id'] ?? 0);
+    $pdo->prepare('UPDATE users SET password_hash = ? WHERE id = ?')->execute([password_hash($newPass, PASSWORD_DEFAULT), $uid]);
+    unset($_SESSION['otp_pending_reset']);
+    $_SESSION['flash_ok'] = 'Kata sandi berhasil diperbarui. Silakan masuk dengan kata sandi baru Anda.';
+    redirect('index.php?p=masuk&tab=login');
 }
 
 if ($page === 'unduh') {
@@ -244,8 +502,21 @@ if ($page === 'profil_simpan' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($nim === '' || mb_strlen($nim) > 40) {
         redirect('index.php?p=profil&err=nim');
     }
-    if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        redirect('index.php?p=profil&err=email');
+    $chkNim = $pdo->prepare('SELECT id FROM users WHERE nim = ? AND id != ?');
+    $chkNim->execute([$nim, (int) $user['id']]);
+    if ($chkNim->fetch()) {
+        redirect('index.php?p=profil&err=nim_dipakai');
+    }
+    if ($email !== '') {
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            redirect('index.php?p=profil&err=email');
+        }
+        $email = normalize_email($email);
+        $chkEmail = $pdo->prepare("SELECT id FROM users WHERE email != '' AND LOWER(email) = LOWER(?) AND id != ?");
+        $chkEmail->execute([$email, (int) $user['id']]);
+        if ($chkEmail->fetch()) {
+            redirect('index.php?p=profil&err=email_dipakai');
+        }
     }
 
     $prodi = mb_substr($prodi, 0, 80);
@@ -322,13 +593,49 @@ if ($page === 'profil_sandi' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     redirect('index.php?p=profil&ok=sandi');
 }
 
+function auth_svg_icon(string $name): string
+{
+    $icons = [
+        'shield' => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>',
+        'key' => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>',
+        'mail-check' => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 13V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12c0 1.1.9 2 2 2h8"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/><path d="m16 19 2 2 4-4"/></svg>',
+        'user-plus' => '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/></svg>',
+        'user' => '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+        'badge' => '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="6" x2="10" y1="10" y2="10"/><line x1="6" x2="14" y1="14" y2="14"/></svg>',
+        'mail' => '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>',
+        'lock' => '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+        'eye' => '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    ];
+    return $icons[$name] ?? '';
+}
+
 if ($page === 'masuk') {
     if (current_user()) {
         redirect('index.php?p=beranda');
     }
-    $flash = $_SESSION['flash'] ?? '';
-    unset($_SESSION['flash']);
-    $err = $flash ? '<p class="err">' . h($flash) . '</p>' : '';
+
+    $tab = (string) ($_GET['tab'] ?? 'login');
+    if (!in_array($tab, ['login', 'otp', 'daftar', 'lupa'], true)) {
+        $tab = 'login';
+    }
+    $step = (string) ($_GET['step'] ?? '');
+    if (!empty($_GET['ubah'])) {
+        if ($tab === 'daftar') {
+            unset($_SESSION['reg_pending']);
+        } elseif ($tab === 'otp') {
+            unset($_SESSION['otp_pending_login']);
+        } elseif ($tab === 'lupa') {
+            unset($_SESSION['otp_pending_reset']);
+        }
+    }
+
+    $flash = (string) ($_SESSION['flash'] ?? '');
+    $flashOk = (string) ($_SESSION['flash_ok'] ?? '');
+    unset($_SESSION['flash'], $_SESSION['flash_ok']);
+    $err = $flash !== '' ? '<p class="err">' . h($flash) . '</p>' : '';
+    $okAlert = $flashOk !== '' ? '<p class="okline">' . h($flashOk) . '</p>' : '';
+
+    $csrf = h(csrf_token());
     $demoHtml = getenv('SHOW_DEMO') === '1' ? '
         <div class="demo">
             <p class="demo-head">Akun Demo Tersedia</p>
@@ -345,17 +652,178 @@ if ($page === 'masuk') {
                 </div>
             </div>
         </div>' : '';
-    $html = '<form class="card auth-card" method="post" action="index.php?p=masuk">
-        <p class="brand lone"><img class="logo" src="logo.svg" width="44" height="44" alt=""><span class="brand-text"><span class="brand-top">Universitas</span><span class="brand-bottom">Indramayu</span></span></p>
-        ' . render_live_clock('live-clock-auth') . '
-        <h1>Masuk ke portal akademik.</h1>
-        <p class="muted">Akses Mahasiswa atau Akun Khusus Dosen Pengampu.</p>
-        ' . $err . '
-        <input type="hidden" name="csrf" value="' . h(csrf_token()) . '">
-        <label>Nama pengguna<input id="login-user" name="username" autocomplete="username" required></label>
-        <label>Sandi<input id="login-pass" name="password" type="password" autocomplete="current-password" required></label>
-        <button type="submit">Masuk</button>' . $demoHtml . '
-    </form>';
+
+    $kickerMap = [
+        'login' => [auth_svg_icon('shield') . '<span>AKUN TERDAFTAR</span>', 'Selamat datang', 'Masuk dengan NIM, NIDN, nama pengguna, atau email terdaftar.'],
+        'otp' => [auth_svg_icon('mail-check') . '<span>MASUK TANPA SANDI</span>', 'Masuk via OTP Email', 'Kami akan mengirimkan kode OTP 6 digit ke email terdaftar Anda.'],
+        'daftar' => [auth_svg_icon('user-plus') . '<span>PENDAFTARAN BARU</span>', 'Daftar Akun Mahasiswa', 'Daftarkan akun mahasiswa baru menggunakan Email, NIM, dan verifikasi OTP email.'],
+        'lupa' => [auth_svg_icon('lock') . '<span>PULIHKAN AKSES</span>', 'Reset Kata Sandi', 'Masukkan email terdaftar untuk menerima kode OTP pemulihan akun.'],
+    ];
+    [$kickerHtml, $headingText, $subText] = $kickerMap[$tab];
+
+    $tabsHtml = '<nav class="auth-tabs" aria-label="Metode autentikasi">'
+        . '<a class="auth-tab' . ($tab === 'login' ? ' is-on' : '') . '" href="index.php?p=masuk&tab=login">' . auth_svg_icon('key') . '<span>Masuk</span></a>'
+        . '<a class="auth-tab' . ($tab === 'otp' ? ' is-on' : '') . '" href="index.php?p=masuk&tab=otp">' . auth_svg_icon('mail-check') . '<span>OTP Email</span></a>'
+        . '<a class="auth-tab' . ($tab === 'daftar' ? ' is-on' : '') . '" href="index.php?p=masuk&tab=daftar">' . auth_svg_icon('user-plus') . '<span>Daftar</span></a>'
+        . '</nav>';
+
+    $formBody = '';
+    if ($tab === 'login') {
+        $formBody = '<form method="post" action="index.php?p=masuk" class="auth-form">'
+            . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+            . '<div class="auth-field"><label for="login-user">NIM, NIDN, Email, atau Nama Pengguna</label>'
+            . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('badge') . '</span>'
+            . '<input id="login-user" name="username" autocomplete="username" placeholder="240511001 / NIDN / nama@gmail.com" required></div></div>'
+            . '<div class="auth-field"><div class="auth-label-row"><label for="login-pass">Kata sandi</label><a class="auth-forgot" href="index.php?p=masuk&tab=lupa">Lupa kata sandi?</a></div>'
+            . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('lock') . '</span>'
+            . '<input id="login-pass" name="password" type="password" autocomplete="current-password" placeholder="Masukkan kata sandi" required>'
+            . '<button type="button" class="pass-toggle" data-toggle-pass="login-pass" aria-label="Tampilkan kata sandi" aria-pressed="false">' . auth_svg_icon('eye') . '</button></div></div>'
+            . '<button type="submit" class="auth-submit">Masuk &rarr;</button>'
+            . '</form>' . $demoHtml;
+    } elseif ($tab === 'otp') {
+        $pendingOtp = $_SESSION['otp_pending_login'] ?? null;
+        if ($step === 'verif' && is_array($pendingOtp) && !empty($pendingOtp['email'])) {
+            $previewHint = !empty($pendingOtp['preview_code'])
+                ? '<p class="auth-preview-otp">Mode uji lokal · Kode OTP: <strong>' . h((string) $pendingOtp['preview_code']) . '</strong></p>'
+                : '';
+            $formBody = '<div class="auth-pending-box"><span>Tujuan OTP: <strong>' . h((string) $pendingOtp['email']) . '</strong></span>'
+                . '<a href="index.php?p=masuk&tab=otp&ubah=1">Ganti email</a></div>'
+                . $previewHint
+                . '<form method="post" action="index.php?p=otp_login_verif" class="auth-form">'
+                . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+                . '<div class="auth-field"><label for="otp-login-code">Kode OTP 6 Digit</label>'
+                . '<input id="otp-login-code" class="otp-input" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" autocomplete="one-time-code" data-otp-input required autofocus></div>'
+                . '<button type="submit" class="auth-submit">Verifikasi &amp; Masuk &rarr;</button></form>'
+                . '<form method="post" action="index.php?p=otp_kirim" class="auth-resend-form">'
+                . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+                . '<input type="hidden" name="purpose" value="login">'
+                . '<input type="hidden" name="email" value="' . h((string) $pendingOtp['email']) . '">'
+                . '<button type="submit" class="btn-ghost-sm auth-resend-btn">Kirim Ulang Kode OTP</button></form>';
+        } else {
+            $formBody = '<form method="post" action="index.php?p=otp_kirim" class="auth-form">'
+                . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+                . '<input type="hidden" name="purpose" value="login">'
+                . '<div class="auth-field"><label for="otp-email">Email terdaftar</label>'
+                . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('mail') . '</span>'
+                . '<input id="otp-email" name="email" type="email" autocomplete="email" placeholder="nama@gmail.com" required></div></div>'
+                . '<button type="submit" class="auth-submit">Kirim Kode OTP ke Email ' . auth_svg_icon('mail-check') . '</button>'
+                . '</form>';
+        }
+    } elseif ($tab === 'daftar') {
+        $pendingReg = $_SESSION['reg_pending'] ?? null;
+        if ($step === 'otp' && is_array($pendingReg) && !empty($pendingReg['email'])) {
+            $previewHint = !empty($pendingReg['preview_code'])
+                ? '<p class="auth-preview-otp">Mode uji lokal · Kode OTP: <strong>' . h((string) $pendingReg['preview_code']) . '</strong></p>'
+                : '';
+            $formBody = '<div class="auth-pending-box">'
+                . '<div><strong>' . h((string) $pendingReg['name']) . '</strong> · NIM <code>' . h((string) $pendingReg['nim']) . '</code><br>'
+                . '<small>OTP dikirim ke <strong>' . h((string) $pendingReg['email']) . '</strong></small></div>'
+                . '<a href="index.php?p=masuk&tab=daftar&ubah=1">Ubah data</a></div>'
+                . $previewHint
+                . '<form method="post" action="index.php?p=daftar_verifikasi" class="auth-form">'
+                . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+                . '<div class="auth-field"><label for="reg-otp-code">Masukkan Kode OTP 6 Digit</label>'
+                . '<input id="reg-otp-code" class="otp-input" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" autocomplete="one-time-code" data-otp-input required autofocus></div>'
+                . '<button type="submit" class="auth-submit">Verifikasi OTP &amp; Buat Akun &rarr;</button></form>'
+                . '<form method="post" action="index.php?p=daftar_kirim_otp" class="auth-resend-form">'
+                . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+                . '<input type="hidden" name="resend" value="1">'
+                . '<button type="submit" class="btn-ghost-sm auth-resend-btn">Kirim Ulang OTP ke Email</button></form>';
+        } else {
+            $draft = $_SESSION['reg_draft'] ?? ['name' => '', 'nim' => '', 'email' => ''];
+            $formBody = '<form method="post" action="index.php?p=daftar_kirim_otp" class="auth-form">'
+                . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+                . '<div class="auth-field"><label for="reg-name">Nama lengkap</label>'
+                . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('user') . '</span>'
+                . '<input id="reg-name" name="name" value="' . h((string) ($draft['name'] ?? '')) . '" maxlength="100" autocomplete="name" placeholder="Nama lengkap sesuai data kampus" required></div></div>'
+                . '<div class="auth-field"><label for="reg-nim">NIM Mahasiswa</label>'
+                . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('badge') . '</span>'
+                . '<input id="reg-nim" name="nim" value="' . h((string) ($draft['nim'] ?? '')) . '" maxlength="40" placeholder="Contoh: 240511088" required></div></div>'
+                . '<div class="auth-field"><label for="reg-email">Email pribadi / Gmail</label>'
+                . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('mail') . '</span>'
+                . '<input id="reg-email" name="email" type="email" value="' . h((string) ($draft['email'] ?? '')) . '" maxlength="120" autocomplete="email" placeholder="nama@gmail.com" required></div></div>'
+                . '<div class="auth-field"><label for="reg-pass">Buat kata sandi (minimal 8 karakter)</label>'
+                . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('lock') . '</span>'
+                . '<input id="reg-pass" name="password" type="password" minlength="8" autocomplete="new-password" placeholder="Minimal 8 karakter" data-pass-input required>'
+                . '<button type="button" class="pass-toggle" data-toggle-pass="reg-pass" aria-label="Tampilkan kata sandi" aria-pressed="false">' . auth_svg_icon('eye') . '</button></div>'
+                . '<div class="pass-meter" data-pass-meter>'
+                . '<div class="pass-bars"><span></span><span></span><span></span><span></span></div>'
+                . '<div class="pass-meta"><span data-pass-label>Minimal 8 karakter</span><span data-pass-count>0/8 karakter</span></div>'
+                . '</div></div>'
+                . '<button type="submit" class="auth-submit">Kirim OTP Pendaftaran ke Email ' . auth_svg_icon('mail-check') . '</button>'
+                . '</form>';
+        }
+    } else {
+        $pendingReset = $_SESSION['otp_pending_reset'] ?? null;
+        if ($step === 'verif' && is_array($pendingReset) && !empty($pendingReset['email'])) {
+            $previewHint = !empty($pendingReset['preview_code'])
+                ? '<p class="auth-preview-otp">Mode uji lokal · Kode OTP: <strong>' . h((string) $pendingReset['preview_code']) . '</strong></p>'
+                : '';
+            $formBody = '<div class="auth-pending-box"><span>Tujuan OTP: <strong>' . h((string) $pendingReset['email']) . '</strong></span>'
+                . '<a href="index.php?p=masuk&tab=lupa&ubah=1">Ganti email</a></div>'
+                . $previewHint
+                . '<form method="post" action="index.php?p=lupa_verifikasi" class="auth-form">'
+                . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+                . '<div class="auth-field"><label for="reset-otp-code">Kode OTP 6 Digit</label>'
+                . '<input id="reset-otp-code" class="otp-input" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" autocomplete="one-time-code" data-otp-input required autofocus></div>'
+                . '<div class="auth-field"><label for="reset-pass">Kata sandi baru (minimal 8 karakter)</label>'
+                . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('lock') . '</span>'
+                . '<input id="reset-pass" name="new_password" type="password" minlength="8" autocomplete="new-password" placeholder="Minimal 8 karakter" data-pass-input required>'
+                . '<button type="button" class="pass-toggle" data-toggle-pass="reset-pass" aria-label="Tampilkan kata sandi" aria-pressed="false">' . auth_svg_icon('eye') . '</button></div>'
+                . '<div class="pass-meter" data-pass-meter><div class="pass-bars"><span></span><span></span><span></span><span></span></div>'
+                . '<div class="pass-meta"><span data-pass-label>Minimal 8 karakter</span><span data-pass-count>0/8 karakter</span></div></div></div>'
+                . '<div class="auth-field"><label for="reset-pass-2">Konfirmasi kata sandi baru</label>'
+                . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('lock') . '</span>'
+                . '<input id="reset-pass-2" name="confirm_password" type="password" minlength="8" autocomplete="new-password" placeholder="Ulangi kata sandi baru" required>'
+                . '<button type="button" class="pass-toggle" data-toggle-pass="reset-pass-2" aria-label="Tampilkan kata sandi" aria-pressed="false">' . auth_svg_icon('eye') . '</button></div></div>'
+                . '<button type="submit" class="auth-submit">Simpan Kata Sandi Baru &rarr;</button></form>'
+                . '<form method="post" action="index.php?p=otp_kirim" class="auth-resend-form">'
+                . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+                . '<input type="hidden" name="purpose" value="reset">'
+                . '<input type="hidden" name="email" value="' . h((string) $pendingReset['email']) . '">'
+                . '<button type="submit" class="btn-ghost-sm auth-resend-btn">Kirim Ulang OTP Reset</button></form>';
+        } else {
+            $formBody = '<form method="post" action="index.php?p=otp_kirim" class="auth-form">'
+                . '<input type="hidden" name="csrf" value="' . $csrf . '">'
+                . '<input type="hidden" name="purpose" value="reset">'
+                . '<div class="auth-field"><label for="reset-email">Email terdaftar</label>'
+                . '<div class="input-wrap"><span class="input-ico">' . auth_svg_icon('mail') . '</span>'
+                . '<input id="reset-email" name="email" type="email" autocomplete="email" placeholder="nama@gmail.com" required></div></div>'
+                . '<button type="submit" class="auth-submit">Kirim OTP Reset ke Email ' . auth_svg_icon('mail-check') . '</button>'
+                . '</form>'
+                . '<p class="auth-back-link"><a href="index.php?p=masuk&tab=login">&larr; Kembali ke halaman Masuk</a></p>';
+        }
+    }
+
+    $html = '<div class="auth-split-wrap">'
+        . '<section class="auth-hero" aria-label="Informasi Portal">'
+        . '<div class="auth-hero-top">'
+        . '<div class="auth-hero-brand">'
+        . '<span class="auth-hero-logo"><img src="logo.svg" width="28" height="28" alt=""></span>'
+        . '<span class="auth-hero-brand-txt"><strong>UNIVERSITAS INDRAMAYU</strong><small>PORTAL AKADEMIK</small></span>'
+        . '</div>'
+        . render_live_clock('live-clock-hero')
+        . '</div>'
+        . '<div class="auth-hero-copy">'
+        . '<span class="auth-hero-pill">FAKULTAS TEKNIK · INFORMATIKA</span>'
+        . '<h2>Satu portal untuk seluruh perjalanan akademik.</h2>'
+        . '<p>Jadwal, pertemuan 1–16, tugas, presensi, UTS/UAS, dan kabar kelas dalam satu tempat.</p>'
+        . '</div>'
+        . '<p class="auth-hero-foot">&copy; 2026 Universitas Indramayu · Akses akun kampus</p>'
+        . '</section>'
+        . '<main class="auth-pane">'
+        . '<div class="card auth-card auth-card-split">'
+        . render_live_clock('live-clock-auth')
+        . '<p class="auth-kicker">' . $kickerHtml . '</p>'
+        . '<h1>' . h($headingText) . '</h1>'
+        . '<p class="auth-sub">' . h($subText) . '</p>'
+        . $tabsHtml
+        . $err . $okAlert
+        . $formBody
+        . '</div>'
+        . '</main>'
+        . '</div>';
+
     layout('Masuk', $html, null);
     exit;
 }
@@ -1068,7 +1536,9 @@ if ($page === 'profil') {
         'username' => 'Nama pengguna login minimal 3 karakter (maks. 60 karakter).',
         'username_dipakai' => 'Nama pengguna tersebut sudah dipakai akun lain.',
         'nim' => $idLabel . ' tidak boleh kosong (maks. 40 karakter).',
+        'nim_dipakai' => $idLabel . ' tersebut sudah dipakai akun lain.',
         'email' => 'Format alamat email tidak valid.',
+        'email_dipakai' => 'Alamat email tersebut sudah dipakai akun lain.',
         'foto' => 'Foto profil harus berupa gambar JPG, PNG, WebP, atau GIF (maks. 4 MB).',
         'sandi_lama' => 'Sandi saat ini tidak cocok.',
         'sandi_pendek' => 'Sandi baru minimal 6 karakter.',

@@ -6,8 +6,9 @@ if (!defined('SERAMBI_APP')) {
 }
 
 require_once __DIR__ . '/seed_data.php';
+require_once __DIR__ . '/mailer.php';
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 function data_dir(): string
 {
@@ -146,6 +147,18 @@ function seed(PDO $pdo): void
             created_at TEXT NOT NULL,
             FOREIGN KEY (author_id) REFERENCES users(id)
         );
+        CREATE TABLE otp_codes (
+            id INTEGER PRIMARY KEY,
+            email TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            consumed_at INTEGER
+        );
+        CREATE INDEX idx_otp_lookup ON otp_codes (email, purpose, created_at);
     SQL);
 
     $insUser = $pdo->prepare('INSERT INTO users (name, username, password_hash, role, nim) VALUES (?, ?, ?, ?, ?)');
@@ -235,6 +248,18 @@ function ensure_schema(PDO $pdo): void
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (author_id) REFERENCES users(id)
             );
+            CREATE TABLE IF NOT EXISTS otp_codes (
+                id INTEGER PRIMARY KEY,
+                email TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                code_hash TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                expires_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                consumed_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_otp_lookup ON otp_codes (email, purpose, created_at);
         SQL);
 
         // Pastikan akun khusus dosen dan akun mahasiswa contoh tersedia.
@@ -564,6 +589,121 @@ function student_course_stats(PDO $pdo, int $studentId): array
         'ips' => $sks === 0 ? '—' : number_format($points / $sks, 2, ',', ''),
         'graded_count' => $gradedCount,
     ];
+}
+
+function normalize_email(string $email): string
+{
+    return function_exists('mb_strtolower') ? mb_strtolower(trim($email), 'UTF-8') : strtolower(trim($email));
+}
+
+/**
+ * Menerbitkan OTP 6 digit berbasis email dan mengirimkannya lewat Resend/SMTP.
+ *
+ * @return array{ok:bool,err?:string,wait?:int,detail?:string,provider?:string,preview_code?:?string}
+ */
+function issue_email_otp(
+    PDO $pdo,
+    string $email,
+    string $purpose,
+    string $recipientName,
+    array $payload = [],
+    int $cooldownSec = 45,
+    int $ttlSec = 600
+): array {
+    $norm = normalize_email($email);
+    $now = time();
+
+    $chk = $pdo->prepare('SELECT created_at FROM otp_codes WHERE email = ? AND purpose = ? AND consumed_at IS NULL AND expires_at > ? ORDER BY id DESC LIMIT 1');
+    $chk->execute([$norm, $purpose, $now]);
+    $lastCreated = $chk->fetchColumn();
+    if ($lastCreated !== false && ($now - (int) $lastCreated) < $cooldownSec) {
+        return ['ok' => false, 'err' => 'cooldown', 'wait' => $cooldownSec - ($now - (int) $lastCreated)];
+    }
+
+    $devPreview = getenv('OTP_DEV_PREVIEW') === '1';
+    if (!mail_transport_configured() && !$devPreview) {
+        return ['ok' => false, 'err' => 'mail_unconfigured'];
+    }
+
+    $pdo->prepare('DELETE FROM otp_codes WHERE expires_at < ?')->execute([$now - 3600]);
+    $pdo->prepare('UPDATE otp_codes SET consumed_at = ? WHERE email = ? AND purpose = ? AND consumed_at IS NULL')->execute([$now, $norm, $purpose]);
+
+    $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+    $hash = password_hash($code, PASSWORD_DEFAULT);
+    $jsonPayload = json_encode($payload, JSON_UNESCAPED_UNICODE) ?: '{}';
+
+    $ins = $pdo->prepare('INSERT INTO otp_codes (email, purpose, code_hash, payload, attempts, expires_at, created_at) VALUES (?, ?, ?, ?, 0, ?, ?)');
+    $ins->execute([$norm, $purpose, $hash, $jsonPayload, $now + $ttlSec, $now]);
+    $otpId = (int) $pdo->lastInsertId();
+
+    $purposeLabels = [
+        'register' => 'Pendaftaran Akun Mahasiswa',
+        'login' => 'Masuk ke Portal Akademik',
+        'reset' => 'Reset Kata Sandi',
+    ];
+
+    if (mail_transport_configured()) {
+        $mailRes = send_otp_email($norm, $recipientName, $code, $purposeLabels[$purpose] ?? 'Verifikasi Akun');
+        if (!$mailRes['ok']) {
+            $pdo->prepare('DELETE FROM otp_codes WHERE id = ?')->execute([$otpId]);
+            return ['ok' => false, 'err' => 'mail_failed', 'detail' => $mailRes['error']];
+        }
+        return ['ok' => true, 'provider' => $mailRes['provider'], 'preview_code' => null];
+    }
+
+    return ['ok' => true, 'provider' => 'preview', 'preview_code' => $code];
+}
+
+/**
+ * Memverifikasi kode OTP 6 digit yang dimasukkan pengguna.
+ *
+ * @return array{ok:bool,err?:string,payload?:array}
+ */
+function verify_email_otp(PDO $pdo, string $email, string $purpose, string $code): array
+{
+    $norm = normalize_email($email);
+    $clean = preg_replace('/\D+/', '', trim($code)) ?? '';
+    if (strlen($clean) !== 6) {
+        return ['ok' => false, 'err' => 'invalid'];
+    }
+
+    $stmt = $pdo->prepare('SELECT * FROM otp_codes WHERE email = ? AND purpose = ? AND consumed_at IS NULL ORDER BY id DESC LIMIT 1');
+    $stmt->execute([$norm, $purpose]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        return ['ok' => false, 'err' => 'not_found'];
+    }
+
+    $now = time();
+    if ($now > (int) $row['expires_at']) {
+        $pdo->prepare('UPDATE otp_codes SET consumed_at = ? WHERE id = ?')->execute([$now, (int) $row['id']]);
+        return ['ok' => false, 'err' => 'expired'];
+    }
+
+    $attempts = (int) $row['attempts'];
+    if ($attempts >= 5) {
+        $pdo->prepare('UPDATE otp_codes SET consumed_at = ? WHERE id = ?')->execute([$now, (int) $row['id']]);
+        return ['ok' => false, 'err' => 'too_many'];
+    }
+
+    if (!password_verify($clean, (string) $row['code_hash'])) {
+        $nextAttempts = $attempts + 1;
+        if ($nextAttempts >= 5) {
+            $pdo->prepare('UPDATE otp_codes SET attempts = ?, consumed_at = ? WHERE id = ?')->execute([$nextAttempts, $now, (int) $row['id']]);
+            return ['ok' => false, 'err' => 'too_many'];
+        }
+        $pdo->prepare('UPDATE otp_codes SET attempts = ? WHERE id = ?')->execute([$nextAttempts, (int) $row['id']]);
+        return ['ok' => false, 'err' => 'invalid'];
+    }
+
+    $upd = $pdo->prepare('UPDATE otp_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL');
+    $upd->execute([$now, (int) $row['id']]);
+    if ($upd->rowCount() !== 1) {
+        return ['ok' => false, 'err' => 'not_found'];
+    }
+
+    $decoded = json_decode((string) $row['payload'], true);
+    return ['ok' => true, 'payload' => is_array($decoded) ? $decoded : []];
 }
 
 function detect_device(): string

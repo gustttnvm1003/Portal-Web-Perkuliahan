@@ -14,6 +14,10 @@ Aplikasi Learning Management System (LMS) / Portal Akademik ringan berbasis **PH
     - `Kelola Materi & Tugas` (`?p=dosen_materi`) — menyunting materi pertemuan 1–16, membuat/menghapus tugas, dan mereset status pengumpulan.
     - `Presensi Pertemuan` (`?p=dosen_presensi`) — mencatat kehadiran mahasiswa per pertemuan 1–16.
     - `Pengumuman & Mahasiswa` (`?p=dosen_pengumuman`) — menerbitkan/menghapus pengumuman kelas serta melihat daftar mahasiswa.
+- **Autentikasi Split-Screen, Daftar Mahasiswa & OTP Email (`?p=masuk`)**:
+  - Tata letak desktop dua kolom dengan panel info akademik di sisi kiri dan kartu masuk/daftar di sisi kanan (`Masuk`, `OTP Email`, `Daftar`, dan `Lupa kata sandi?`).
+  - Mendukung masuk dengan Nama Pengguna, NIM, NIDN, atau Email terdaftar, serta **Masuk via OTP Email** (6 digit) dan **Reset Kata Sandi via OTP Email**.
+  - Halaman **Daftar Akun Mahasiswa** (`?p=masuk&tab=daftar`) dilengkapi indikator kekuatan kata sandi (`0/8 karakter`) serta verifikasi **kode OTP 6 digit ke email** melalui [mailer.php](mailer.php) (mendukung **SMTP** Gmail/kampus maupun **Resend API**).
 - **Edit Profil & Foto Profil (`?p=profil`)**: Akun **Mahasiswa** maupun **Dosen** dapat mengubah foto profil (JPG/PNG/WebP/GIF maks. 4 MB dengan pratinjau langsung, serta opsi hapus foto), nama lengkap, nama pengguna, NIM/NIDN, program studi, email, nomor HP, bio singkat, dan sandi akun.
 - **Live Clock Real-Time**: Penunjuk tanggal & waktu aktif di header setiap halaman dan kartu masuk, dengan format Indonesia (`HH:MM:SS` tabular) serta deteksi zona waktu (`WIB`/`WITA`/`WIT`).
 - **UI Responsif & Drawer Kiri**: Sidebar permanen pada layar lebar (`> 900px`) dan slide-in drawer di sebelah kiri melalui tombol `☰` pada mobile/tablet (`<= 900px`), latar batik tetap diam saat scroll, serta metadata PWA (`manifest.webmanifest`).
@@ -45,7 +49,7 @@ Aplikasi Learning Management System (LMS) / Portal Akademik ringan berbasis **PH
 
 ## Menjalankan Secara Lokal
 
-Prasyarat: **PHP 8.1+** dengan ekstensi `pdo_sqlite` dan `mbstring`.
+Prasyarat: **PHP 8.1+** dengan ekstensi `pdo_sqlite`, `mbstring`, `openssl`, dan `curl`.
 
 ```bash
 git clone https://github.com/gustttnvm1003/Portal-Web-Perkuliahan.git
@@ -53,7 +57,22 @@ cd Portal-Web-Perkuliahan
 php -S localhost:8000 router.php
 ```
 
-Lalu buka http://localhost:8000 di peramban. Basis data SQLite akan dibuat dan diisi otomatis pada direktori `data/` saat akses pertama (`SCHEMA_VERSION = 5`). Hapus folder `data/` jika ingin mengatur ulang data awal.
+Lalu buka http://localhost:8000 di peramban. Basis data SQLite akan dibuat dan diisi otomatis pada direktori `data/` saat akses pertama (`SCHEMA_VERSION = 7`). Hapus folder `data/` jika ingin mengatur ulang data awal.
+
+## Konfigurasi Pengiriman OTP Email
+
+Untuk mengirimkan kode OTP verifikasi ke kotak masuk pengguna secara nyata, atur salah satu metode berikut melalui environment variable:
+
+1. **SMTP (Gmail App Password / SMTP Kampus / Brevo)**:
+   - `SMTP_HOST` (mis. `smtp.gmail.com`)
+   - `SMTP_PORT` (`465` SSL atau `587` STARTTLS)
+   - `SMTP_USER` (alamat email pengirim)
+   - `SMTP_PASS` (App Password / kata sandi SMTP)
+   - `SMTP_FROM` *(opsional)* dan `SMTP_FROM_NAME` *(opsional)*
+2. **Resend HTTPS API**:
+   - `RESEND_API_KEY` dan *(opsional)* `RESEND_FROM`
+
+> Untuk pengujian lokal tanpa SMTP, set `OTP_DEV_PREVIEW=1`.
 
 ## Deployment (Docker / Railway)
 
@@ -61,19 +80,20 @@ Proyek ini sudah menyertakan [Dockerfile](Dockerfile) berbasis `php:8.2-cli` dan
 
 - **Endpoint Healthcheck**: `GET /health` mengembalikan HTTP `200` (`ok`).
 - **Penyimpanan Persisten**: Atur `SERAMBI_DATA_DIR` (atau `RAILWAY_VOLUME_MOUNT_PATH`, misalnya volume yang dipasang pada `/serambi-data`) agar SQLite dan berkas unggahan (`uploads/`) bertahan antar-deploy.
-- **Proteksi Berkas Internal**: [router.php](router.php) memblokir akses HTTP langsung (`403`) ke direktori `/data`, dotfile, berkas `.sqlite`/`.db`/`.md`/`.json`/`.lock`, serta modul internal (`lib.php`, `seed_data.php`, `dosen_pages.php`, `router.php`, `Dockerfile`).
+- **Proteksi Berkas Internal**: [router.php](router.php) memblokir akses HTTP langsung (`403`) ke direktori `/data`, dotfile, berkas `.sqlite`/`.db`/`.md`/`.json`/`.lock`, serta modul internal (`lib.php`, `seed_data.php`, `dosen_pages.php`, `mailer.php`, `router.php`, `Dockerfile`).
 
 ## Struktur Berkas
 
 ```text
 .
-├── index.php             # Router utama halaman & alur mahasiswa
-├── lib.php               # Koneksi SQLite, skema, sesi/CSRF, layout, drawer & live clock
+├── index.php             # Router utama, autentikasi split-screen & alur mahasiswa
+├── lib.php               # Koneksi SQLite, skema, OTP helpers, sesi/CSRF, layout & live clock
 ├── dosen_pages.php       # Handler & tampilan khusus dosen
+├── mailer.php            # Pengirim email OTP via Resend API atau SMTP SSL/STARTTLS
 ├── seed_data.php         # Seed 8 mata kuliah, silabus P1–P16, tugas & ujian
 ├── router.php            # Front-controller PHP built-in server & endpoint /health
-├── app.css               # Gaya antarmuka, tema ungu-batik, drawer kiri & responsivitas
-├── app.js                # Drawer menu kiri, live clock real-time, interaksi & efek UI
+├── app.css               # Gaya antarmuka, split auth, tema ungu-batik, drawer & responsivitas
+├── app.js                # Drawer kiri, live clock, toggle sandi, meter kekuatan & pratinjau foto
 ├── Dockerfile            # Konfigurasi container produksi PHP 8.2 CLI
 ├── manifest.webmanifest  # Konfigurasi PWA & ikon aplikasi
 ├── .gitignore            # Pengecualian data lokal, sqlite & log
