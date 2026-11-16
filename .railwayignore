@@ -1,0 +1,7 @@
+data/
+.git/
+package-lock.json
+*.sqlite
+*.sqlite3
+*.log
+

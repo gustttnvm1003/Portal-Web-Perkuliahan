@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
+  <rect width="320" height="320" fill="#1a0f2e"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke="#3b1d75" stroke-width="14"
+      d="M20 90c28-40 70-52 100-24 18 16 14 48-8 64 36 6 62 34 54 68-8 32-42 46-72 32"/>
+    <path stroke="#2d165c" stroke-width="10"
+      d="M18 92c20-28 48-36 70-20"/>
+    <path stroke="#4c1d95" stroke-width="8"
+      d="M28 98c16-20 38-26 54-14"/>
+    <path stroke="#3b1d75" stroke-width="14"
+      d="M170 50c32-36 78-40 108 8 18 28 8 64-24 78 32 14 46 50 28 80-16 28-54 34-80 12"/>
+    <path stroke="#2d165c" stroke-width="10"
+      d="M168 52c22-24 52-28 74-8"/>
+    <path stroke="#5b2db5" stroke-width="7"
+      d="M180 60c16-16 38-20 54-8"/>
+    <path stroke="#3b1d75" stroke-width="14"
+      d="M40 210c30-42 74-52 106-22 20 18 14 52-10 68 38 8 64 36 54 70-10 32-46 46-76 30"/>
+    <path stroke="#2d165c" stroke-width="10"
+      d="M38 212c22-30 52-38 74-20"/>
+    <path stroke="#4c1d95" stroke-width="8"
+      d="M50 220c16-20 40-26 56-12"/>
+    <path stroke="#3b1d75" stroke-width="13"
+      d="M190 200c28-36 68-44 96-14 16 18 12 48-8 62 30 8 50 34 40 62-10 26-40 36-66 22"/>
+    <path stroke="#2d165c" stroke-width="9"
+      d="M188 202c18-24 44-30 64-14"/>
+    <path stroke="#5b2db5" stroke-width="7"
+      d="M198 210c14-16 34-20 48-8"/>
+  </g>
+  <g fill="none" stroke-linecap="round">
+    <path stroke="#6d4aff" stroke-width="5" opacity="0.85"
+      d="M60 40c18-22 44-28 62-12 12 10 10 30-4 40"/>
+    <path stroke="#8b6fff" stroke-width="3.5" opacity="0.7"
+      d="M58 42c12-14 30-18 42-8"/>
+    <path stroke="#6d4aff" stroke-width="5" opacity="0.8"
+      d="M230 130c16-20 40-26 56-10 10 10 8 26-4 34"/>
+    <path stroke="#a78bfa" stroke-width="3" opacity="0.65"
+      d="M228 132c10-12 26-16 38-8"/>
+    <path stroke="#6d4aff" stroke-width="5" opacity="0.8"
+      d="M120 280c20-24 48-30 68-12 12 12 8 32-6 42"/>
+    <path stroke="#8b6fff" stroke-width="3.5" opacity="0.7"
+      d="M118 282c14-16 32-20 46-10"/>
+    <path stroke="#7c5cff" stroke-width="4.5" opacity="0.75"
+      d="M280 250c14-18 36-22 50-8 8 8 6 22-4 28"/>
+  </g>
+  <g fill="none" stroke-linecap="round" opacity="0.55">
+    <path stroke="#c4b5fd" stroke-width="2.2"
+      d="M30 95c14-18 34-24 50-12"/>
+    <path stroke="#ddd6fe" stroke-width="1.8"
+      d="M175 58c12-12 28-14 40-4"/>
+    <path stroke="#c4b5fd" stroke-width="2"
+      d="M48 218c14-18 34-22 50-10"/>
+    <path stroke="#ddd6fe" stroke-width="1.8"
+      d="M195 208c12-14 28-16 40-6"/>
+  </g>
+</svg>
